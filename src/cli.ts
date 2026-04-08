@@ -65,128 +65,132 @@ program
   .action(async (domain: string | undefined, opts: { language?: string }) => {
     const cwd = process.cwd();
     const configPath = resolve(cwd, 'researcher.json');
-
     const dirName = basename(cwd).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
 
     let config: ProjectConfig;
+    let bootstrapped = false;
 
     if (existsSync(configPath)) {
       // Config already exists — just set up database
       config = await loadConfig(cwd);
       console.log(`Using existing researcher.json (${config.name})`);
-    } else if (domain) {
-      // AI-bootstrapped setup
-      const result = await bootstrapProject(domain, opts.language);
-
-      config = {
-        name: result.name,
-        description: result.description,
-        language: result.language,
-        database: `researcher_${result.name.replace(/-/g, '_')}`,
-        llm: {
-          provider: 'claude',
-          model: 'opus',
-          allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
-        },
-        library: {
-          sources: [{
-            type: 'doaj',
-            enabled: true,
-            interval: 86400,
-            settings: { searchTerms: result.searchTerms },
-          }],
-        },
-        research: {
-          agentTypes: result.agents.map(a => a.name),
-          strategyFile: 'research/strategy.md',
-          reflectEvery: 3,
-        },
-      };
-
-      writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
-      console.log('Created researcher.json');
-
-      // Write agents
-      const agentsDir = resolve(cwd, 'research', 'agents');
-      mkdirSync(agentsDir, { recursive: true });
-      for (const agent of result.agents) {
-        writeFileSync(resolve(agentsDir, `${agent.name}.md`), agent.prompt);
-        console.log(`  Created agent: ${agent.name}`);
-      }
-
-      // Write methods
-      const methodsDir = resolve(cwd, 'research', 'methods');
-      mkdirSync(methodsDir, { recursive: true });
-      for (const method of result.methods) {
-        writeFileSync(resolve(methodsDir, `${method.name}.md`), method.content);
-        console.log(`  Created method: ${method.name}`);
-      }
-
-      // Write strategy
-      const researchDir = resolve(cwd, 'research');
-      mkdirSync(researchDir, { recursive: true });
-      writeFileSync(resolve(researchDir, 'strategy.md'), result.strategy);
-      console.log('  Created strategy');
-
-      // Write module configs
-      if (result.moduleConfigs) {
-        const modulesDir = resolve(cwd, 'research', 'modules');
-        mkdirSync(modulesDir, { recursive: true });
-        for (const [name, moduleConfig] of Object.entries(result.moduleConfigs)) {
-          writeFileSync(resolve(modulesDir, `${name}.json`), JSON.stringify(moduleConfig, null, 2) + '\n');
-          console.log(`  Created module config: ${name}`);
-        }
-      }
-
-      // Write adapted prompts
-      if (result.prompts) {
-        const promptsDir = resolve(cwd, 'research', 'prompts');
-        mkdirSync(promptsDir, { recursive: true });
-        for (const prompt of result.prompts) {
-          writeFileSync(resolve(promptsDir, `${prompt.name}.md`), prompt.content);
-          console.log(`  Created prompt: ${prompt.name}`);
-        }
-      }
     } else {
-      // Create blank defaults
-      const dbName = `researcher_${dirName}`;
-      config = {
-        name: dirName,
-        description: '',
-        language: 'en',
-        database: dbName,
-        llm: {
-          provider: 'claude',
-          model: 'opus',
-          allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
-        },
-        library: {
-          sources: [],
-        },
-        research: {
-          agentTypes: [],
-          strategyFile: 'research/strategy.md',
-          reflectEvery: 3,
-        },
-      };
+      // If no domain given, ask interactively
+      let finalDomain = domain;
+      let finalLanguage = opts.language;
 
-      writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
-      console.log('Created researcher.json');
+      if (!finalDomain) {
+        process.stdout.write('Domain: ');
+        finalDomain = await new Promise<string>((resolve) => {
+          process.stdin.setEncoding('utf-8');
+          process.stdin.once('data', (chunk) => resolve(chunk.toString().trim()));
+          process.stdin.resume();
+        });
+      }
+
+      if (!finalLanguage && finalDomain) {
+        process.stdout.write('Language [en]: ');
+        finalLanguage = await new Promise<string>((resolve) => {
+          process.stdin.once('data', (chunk) => {
+            const val = chunk.toString().trim();
+            resolve(val || 'en');
+          });
+        });
+      }
+
+      if (finalDomain) {
+        // AI-bootstrapped setup
+        const result = await bootstrapProject(finalDomain, finalLanguage);
+        bootstrapped = true;
+
+        config = {
+          name: result.name,
+          description: result.description,
+          language: result.language,
+          database: `researcher_${result.name.replace(/-/g, '_')}`,
+          llm: {
+            provider: 'claude',
+            model: 'opus',
+            allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
+          },
+          library: {
+            sources: [{
+              type: 'doaj',
+              enabled: true,
+              interval: 86400,
+              settings: { searchTerms: result.searchTerms },
+            }],
+          },
+          research: {
+            agentTypes: result.agents.map(a => a.name),
+            strategyFile: 'research/strategy.md',
+            reflectEvery: 3,
+          },
+        };
+
+        writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+        console.log('Created researcher.json');
+
+        // Write all bootstrap output
+        for (const agent of result.agents) {
+          const dir = resolve(cwd, 'research', 'agents');
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(resolve(dir, `${agent.name}.md`), agent.prompt);
+          console.log(`  Created agent: ${agent.name}`);
+        }
+        for (const method of result.methods) {
+          const dir = resolve(cwd, 'research', 'methods');
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(resolve(dir, `${method.name}.md`), method.content);
+          console.log(`  Created method: ${method.name}`);
+        }
+        mkdirSync(resolve(cwd, 'research'), { recursive: true });
+        writeFileSync(resolve(cwd, 'research', 'strategy.md'), result.strategy);
+        console.log('  Created strategy');
+        if (result.moduleConfigs) {
+          const dir = resolve(cwd, 'research', 'modules');
+          mkdirSync(dir, { recursive: true });
+          for (const [name, mc] of Object.entries(result.moduleConfigs)) {
+            writeFileSync(resolve(dir, `${name}.json`), JSON.stringify(mc, null, 2) + '\n');
+            console.log(`  Created module config: ${name}`);
+          }
+        }
+        if (result.prompts) {
+          const dir = resolve(cwd, 'research', 'prompts');
+          mkdirSync(dir, { recursive: true });
+          for (const p of result.prompts) {
+            writeFileSync(resolve(dir, `${p.name}.md`), p.content);
+            console.log(`  Created prompt: ${p.name}`);
+          }
+        }
+      } else {
+        // No domain — blank defaults
+        config = {
+          name: dirName,
+          description: '',
+          language: 'en',
+          database: `researcher_${dirName}`,
+          llm: {
+            provider: 'claude',
+            model: 'opus',
+            allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
+          },
+          library: { sources: [] },
+          research: { agentTypes: [], strategyFile: 'research/strategy.md', reflectEvery: 3 },
+        };
+        writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+        console.log('Created researcher.json');
+      }
     }
 
-    // Create research/ directory with empty strategy.md (if not already created by bootstrap)
+    // Ensure research/ and strategy.md exist
     const researchDir = resolve(cwd, 'research');
-    if (!existsSync(researchDir)) {
-      mkdirSync(researchDir, { recursive: true });
-    }
+    if (!existsSync(researchDir)) mkdirSync(researchDir, { recursive: true });
     const strategyPath = resolve(researchDir, 'strategy.md');
-    if (!existsSync(strategyPath)) {
-      writeFileSync(strategyPath, '# Research Strategy\n\n');
-    }
+    if (!existsSync(strategyPath)) writeFileSync(strategyPath, '# Research Strategy\n\n');
 
+    // Create database + run migrations
     const dbName = config.database;
-
-    // Create the PostgreSQL database
     console.log(`Creating database "${dbName}"...`);
     const adminClient = new SQL('postgresql://postgres@localhost:5432/postgres');
     try {
@@ -203,28 +207,25 @@ program
       adminClient.close();
     }
 
-    // Run migrations
     console.log('Running migrations...');
     const dbUrl = `postgresql://postgres@localhost:5432/${dbName}`;
     const migrationClient = new SQL(dbUrl);
-    // Ensure pgvector extension exists
     await migrationClient.unsafe('CREATE EXTENSION IF NOT EXISTS vector');
     const db = drizzle({ client: migrationClient });
-    const packageRoot = resolve(import.meta.dir, '..'); // src/ -> package root
+    const packageRoot = resolve(import.meta.dir, '..');
     await migrate(db, { migrationsFolder: resolve(packageRoot, 'drizzle') });
     migrationClient.close();
     console.log('Migrations complete.');
 
     console.log(`\nProject "${config.name}" initialized successfully.`);
-    if (domain) {
+    if (bootstrapped) {
       console.log('Next steps:');
       console.log('  1. Review researcher.json and research/ files');
       console.log('  2. Run "researcher library start" to begin collecting documents');
     } else {
       console.log('Next steps:');
       console.log('  1. Edit researcher.json to configure sources');
-      console.log('  2. Edit research/strategy.md to define your research focus');
-      console.log('  3. Run "researcher library start" to begin collecting documents');
+      console.log('  2. Run "researcher library start" to begin collecting documents');
     }
   });
 

@@ -5,19 +5,22 @@ import { sql } from 'drizzle-orm';
 import { LLM, RateLimitError } from '../../llm/llm.js';
 import { Logger } from '../../core/logger.js';
 import { PaperPipeline } from './pipeline.js';
+import { Learner } from '../../core/learner.js';
 
 export class PaperDispatcher {
   private running = false;
   private tickInterval = 5000;
   private log = new Logger('paper');
+  private learner: Learner | null = null;
 
   async start(ctx: SubsystemContext): Promise<void> {
     this.running = true;
+    this.learner = new Learner(new LLM(ctx.config.llm), process.cwd());
     this.log.info('Paper dispatcher started');
 
     while (this.running) {
       try {
-        await this.tick(ctx);
+        await this.tick(ctx, this.learner);
       } catch (e) {
         if (e instanceof RateLimitError) {
           this.log.warn(`Rate limited. Waiting ${Math.ceil(e.waitMs / 60000)} min...`);
@@ -34,7 +37,9 @@ export class PaperDispatcher {
 
   async runOnce(ctx: SubsystemContext): Promise<void> {
     this.log.info('Running paper pipeline (one pass)');
-    await this.tick(ctx);
+    const learner = new Learner(new LLM(ctx.config.llm), process.cwd());
+    await this.tick(ctx, learner);
+    await learner.maybeLearn();
     this.log.info('Paper pass complete');
   }
 
@@ -42,7 +47,7 @@ export class PaperDispatcher {
     this.running = false;
   }
 
-  private async tick(ctx: SubsystemContext): Promise<void> {
+  private async tick(ctx: SubsystemContext, learner: Learner | null = null): Promise<void> {
     if (LLM.isCurrentlyRateLimited()) return;
 
     const db = getDb();
@@ -83,6 +88,7 @@ export class PaperDispatcher {
 
     if (draftPaper) {
       await pipeline.reviewAndRevise(draftPaper);
+      if (learner) await learner.maybeLearn();
       return;
     }
   }

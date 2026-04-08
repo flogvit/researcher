@@ -1,7 +1,7 @@
 import type { SubsystemContext } from '../../core/subsystem.js';
 import { getDb } from '../../db/connection.js';
-import { agentTasks, findings, researchLog } from '../../db/schema.js';
-import { eq, desc, sql, asc } from 'drizzle-orm';
+import { agentTasks, findings, researchLog, projects, documents, embeddings } from '../../db/schema.js';
+import { eq, desc, sql, asc, and } from 'drizzle-orm';
 import { LLM, RateLimitError } from '../../llm/llm.js';
 import { Logger } from '../../core/logger.js';
 import { Triage } from './triage.js';
@@ -12,6 +12,13 @@ import { Supervisor } from './supervisor.js';
 import { PromptAgent } from './agents/prompt-agent.js';
 import type { BaseAgent } from './agents/base-agent.js';
 import { resolve } from 'node:path';
+import { searchSimilar } from '../../llm/embeddings.js';
+import {
+  LITERATURE_REVIEW,
+  IDENTIFY_GAPS,
+  PROJECT_GENERATE_TASKS,
+  WRITE_PROJECT_PAPER,
+} from '../../prompts/project.js';
 
 export class ResearchDispatcher {
   private running = false;
@@ -52,6 +59,9 @@ export class ResearchDispatcher {
       processed = await this.processOneTask(ctx);
     }
 
+    // Check project phases
+    await this.checkProjects(ctx);
+
     // Reflect if needed
     if (this.tasksSinceReflection > 0) {
       await this.runReflection(ctx);
@@ -82,6 +92,9 @@ export class ResearchDispatcher {
       // Or generate work
       await this.runGenerateWork(ctx);
     }
+
+    // Check project phases
+    await this.checkProjects(ctx);
 
     // Supervisor every 5 min
     if (now - this.lastSupervisorTime > 300_000) {
@@ -300,6 +313,368 @@ export class ResearchDispatcher {
     const llm = new LLM(ctx.config.llm);
     const supervisor = new Supervisor(llm);
     await supervisor.check();
+  }
+
+  private async checkProjects(ctx: SubsystemContext): Promise<void> {
+    if (LLM.isCurrentlyRateLimited()) return;
+
+    const db = getDb();
+
+    // Find active projects that have no pending/in_progress tasks with their projectId
+    const activeProjects = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.status, 'active'));
+
+    for (const project of activeProjects) {
+      // Check if project has pending or in_progress tasks
+      const [taskCount] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(agentTasks)
+        .where(
+          and(
+            eq(agentTasks.projectId, project.id),
+            sql`${agentTasks.status} IN ('pending', 'in_progress')`,
+          ),
+        );
+
+      if (Number(taskCount.count) > 0) continue;
+
+      // No active tasks — advance the phase
+      try {
+        await this.runProjectPhase(project, ctx);
+      } catch (e) {
+        if (e instanceof RateLimitError) throw e;
+        this.log.error(`Project "${project.title}" phase error: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+  }
+
+  private async runProjectPhase(
+    project: typeof projects.$inferSelect,
+    ctx: SubsystemContext,
+  ): Promise<void> {
+    this.log.info(`Project "${project.title}" — phase: ${project.phase}`);
+
+    switch (project.phase) {
+      case 'literature_search':
+        await this.projectLiteratureSearch(project, ctx);
+        break;
+      case 'literature_review':
+        await this.projectLiteratureReview(project, ctx);
+        break;
+      case 'identify_gaps':
+        await this.projectIdentifyGaps(project, ctx);
+        break;
+      case 'research':
+        await this.projectResearch(project, ctx);
+        break;
+      case 'paper':
+        await this.projectWritePaper(project, ctx);
+        break;
+    }
+  }
+
+  private async projectLiteratureSearch(
+    project: typeof projects.$inferSelect,
+    ctx: SubsystemContext,
+  ): Promise<void> {
+    this.log.info(`Project "${project.title}": searching for existing research...`);
+    const db = getDb();
+
+    // Semantic search using embeddings
+    let semanticResults: Array<{ sourceId: number | null }> = [];
+    try {
+      semanticResults = await searchSimilar(project.title, 20);
+    } catch (e) {
+      this.log.warn(`Semantic search failed: ${e instanceof Error ? e.message : e}`);
+    }
+
+    // Keyword search on documents
+    const keywords = project.title.split(/\s+/).filter(w => w.length > 3);
+    const keywordConditions = keywords.map(k => `%${k}%`);
+
+    let keywordDocs: Array<{ id: number }> = [];
+    for (const pattern of keywordConditions) {
+      const results = await db
+        .select({ id: documents.id })
+        .from(documents)
+        .where(sql`(${documents.title} ILIKE ${pattern} OR ${documents.content} ILIKE ${pattern})`)
+        .limit(20);
+      keywordDocs.push(...results);
+    }
+
+    // Combine unique document IDs
+    const docIds = new Set<number>();
+    for (const r of semanticResults) {
+      if (r.sourceId != null) docIds.add(r.sourceId);
+    }
+    for (const d of keywordDocs) {
+      docIds.add(d.id);
+    }
+
+    const materialsCount = docIds.size;
+
+    // Log and advance phase
+    await db.insert(researchLog).values({
+      eventType: 'project_phase_complete',
+      agentType: 'dispatcher',
+      details: {
+        projectId: project.id,
+        title: project.title,
+        phase: 'literature_search',
+        materialsFound: materialsCount,
+      },
+    });
+
+    await db.update(projects).set({
+      phase: 'literature_review',
+      updatedAt: new Date(),
+    }).where(eq(projects.id, project.id));
+
+    this.log.info(`Project "${project.title}": found ${materialsCount} materials. Moving to literature_review.`);
+  }
+
+  private async projectLiteratureReview(
+    project: typeof projects.$inferSelect,
+    ctx: SubsystemContext,
+  ): Promise<void> {
+    this.log.info(`Project "${project.title}": reviewing literature...`);
+    const db = getDb();
+    const llm = new LLM(ctx.config.llm);
+
+    // Get relevant documents via keyword search
+    const keywords = project.title.split(/\s+/).filter(w => w.length > 3);
+    const allDocs: Array<{ title: string; content: string | null; author: string | null; summary: string | null }> = [];
+
+    for (const keyword of keywords) {
+      const docs = await db
+        .select({
+          title: documents.title,
+          content: documents.content,
+          author: documents.author,
+          summary: documents.summary,
+        })
+        .from(documents)
+        .where(sql`(${documents.title} ILIKE ${'%' + keyword + '%'} OR ${documents.content} ILIKE ${'%' + keyword + '%'})`)
+        .limit(15);
+      allDocs.push(...docs);
+    }
+
+    // Also get semantic matches
+    try {
+      const semanticResults = await searchSimilar(project.title, 10);
+      for (const result of semanticResults) {
+        allDocs.push({
+          title: result.content.slice(0, 100),
+          content: result.content,
+          author: null,
+          summary: null,
+        });
+      }
+    } catch {
+      // Semantic search may not be available
+    }
+
+    // Deduplicate by title
+    const seen = new Set<string>();
+    const uniqueDocs = allDocs.filter(d => {
+      if (seen.has(d.title)) return false;
+      seen.add(d.title);
+      return true;
+    });
+
+    const materialSummaries = uniqueDocs.map(m =>
+      `- ${m.title}${m.author ? ` (${m.author})` : ''}: ${(m.summary || m.content || '').slice(0, 300)}`,
+    ).join('\n');
+
+    const prompt = LLM.formatPrompt(LITERATURE_REVIEW, {
+      title: project.title,
+      count: String(uniqueDocs.length),
+      materials: materialSummaries || '(no materials found)',
+    });
+
+    const response = await llm.call(prompt);
+
+    await db.update(projects).set({
+      literatureReview: response.text,
+      phase: 'identify_gaps',
+      updatedAt: new Date(),
+    }).where(eq(projects.id, project.id));
+
+    await db.insert(researchLog).values({
+      eventType: 'project_phase_complete',
+      agentType: 'dispatcher',
+      details: {
+        projectId: project.id,
+        title: project.title,
+        phase: 'literature_review',
+        reviewLength: response.text.length,
+      },
+    });
+
+    this.log.info(`Project "${project.title}": literature review complete (${response.text.length} chars). Moving to identify_gaps.`);
+  }
+
+  private async projectIdentifyGaps(
+    project: typeof projects.$inferSelect,
+    ctx: SubsystemContext,
+  ): Promise<void> {
+    this.log.info(`Project "${project.title}": identifying research gaps...`);
+    const db = getDb();
+    const llm = new LLM(ctx.config.llm);
+
+    const prompt = LLM.formatPrompt(IDENTIFY_GAPS, {
+      title: project.title,
+      literatureReview: project.literatureReview || '(no review available)',
+    });
+
+    const response = await llm.callJSON<{
+      gaps: Array<{ title: string; description: string; significance: string }>;
+      suggestedTasks: Array<{ agentType: string; description: string; priority: number }>;
+    }>(prompt);
+
+    // Save gaps
+    await db.update(projects).set({
+      identifiedGaps: response.data.gaps,
+      phase: 'research',
+      updatedAt: new Date(),
+    }).where(eq(projects.id, project.id));
+
+    // Create tasks from gaps
+    for (const task of response.data.suggestedTasks.slice(0, 5)) {
+      await db.insert(agentTasks).values({
+        agentType: task.agentType,
+        status: 'pending',
+        priority: task.priority,
+        projectId: project.id,
+        payload: { description: task.description },
+      });
+    }
+
+    await db.insert(researchLog).values({
+      eventType: 'project_phase_complete',
+      agentType: 'dispatcher',
+      details: {
+        projectId: project.id,
+        title: project.title,
+        phase: 'identify_gaps',
+        gaps: response.data.gaps.length,
+        tasks: response.data.suggestedTasks.length,
+      },
+    });
+
+    this.log.info(`Project "${project.title}": found ${response.data.gaps.length} gaps, created ${response.data.suggestedTasks.length} tasks. Moving to research.`);
+  }
+
+  private async projectResearch(
+    project: typeof projects.$inferSelect,
+    ctx: SubsystemContext,
+  ): Promise<void> {
+    const db = getDb();
+    const llm = new LLM(ctx.config.llm);
+
+    // Check if we have enough findings to write a paper
+    const [count] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(findings)
+      .where(eq(findings.projectId, project.id));
+    const findingCount = Number(count.count);
+
+    await db.update(projects).set({ findingsCount: findingCount, updatedAt: new Date() })
+      .where(eq(projects.id, project.id));
+
+    if (findingCount >= 5) {
+      await db.update(projects).set({ phase: 'paper', updatedAt: new Date() })
+        .where(eq(projects.id, project.id));
+      this.log.info(`Project "${project.title}": ${findingCount} findings. Moving to paper.`);
+      return;
+    }
+
+    // Need more research — generate tasks targeting the gaps
+    const gaps = (project.identifiedGaps as Array<{ title: string; description: string }>) || [];
+    if (gaps.length === 0) {
+      await db.update(projects).set({ phase: 'identify_gaps', updatedAt: new Date() })
+        .where(eq(projects.id, project.id));
+      return;
+    }
+
+    const projectFindings = await db
+      .select({ finding: findings.finding })
+      .from(findings)
+      .where(eq(findings.projectId, project.id))
+      .limit(10);
+
+    const prompt = LLM.formatPrompt(PROJECT_GENERATE_TASKS, {
+      title: project.title,
+      gaps: gaps.map((g, i) => `${i + 1}. ${g.title}: ${g.description}`).join('\n'),
+      findingCount: String(findingCount),
+      findings: projectFindings.map(f => `- ${f.finding.slice(0, 100)}`).join('\n'),
+    });
+
+    const response = await llm.callJSON<{
+      tasks: Array<{ agentType: string; description: string; priority: number }>;
+    }>(prompt);
+
+    for (const task of response.data.tasks) {
+      await db.insert(agentTasks).values({
+        agentType: task.agentType,
+        status: 'pending',
+        priority: task.priority,
+        projectId: project.id,
+        payload: { description: task.description },
+      });
+    }
+
+    this.log.info(`Project "${project.title}": generated ${response.data.tasks.length} tasks for ${findingCount} findings.`);
+  }
+
+  private async projectWritePaper(
+    project: typeof projects.$inferSelect,
+    ctx: SubsystemContext,
+  ): Promise<void> {
+    // Skip if paper already written
+    if (project.paperDraft) return;
+
+    this.log.info(`Project "${project.title}": writing paper...`);
+    const db = getDb();
+    const llm = new LLM(ctx.config.llm);
+
+    const projectFindings = await db
+      .select()
+      .from(findings)
+      .where(eq(findings.projectId, project.id))
+      .orderBy(desc(findings.createdAt))
+      .limit(20);
+
+    const prompt = LLM.formatPrompt(WRITE_PROJECT_PAPER, {
+      title: project.title,
+      literatureReview: (project.literatureReview || '').slice(0, 3000),
+      gaps: JSON.stringify(project.identifiedGaps, null, 2),
+      findingCount: String(projectFindings.length),
+      findings: projectFindings.map(f => `[${f.evidenceStrength}] ${f.finding}`).join('\n\n'),
+    });
+
+    const response = await llm.call(prompt);
+
+    await db.update(projects).set({
+      paperDraft: response.text,
+      paperStatus: 'draft',
+      updatedAt: new Date(),
+    }).where(eq(projects.id, project.id));
+
+    await db.insert(researchLog).values({
+      eventType: 'project_phase_complete',
+      agentType: 'dispatcher',
+      details: {
+        projectId: project.id,
+        title: project.title,
+        phase: 'paper',
+        paperLength: response.text.length,
+      },
+    });
+
+    this.log.info(`Project "${project.title}": paper written (${response.text.length} chars).`);
   }
 
   private getAgent(agentType: string, llm: LLM, projectDir: string): BaseAgent {

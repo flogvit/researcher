@@ -1,0 +1,25 @@
+{
+  "name": "researcher",
+  "version": "0.0.1",
+  "description": "Autonomous AI research system",
+  "type": "module",
+  "bin": {
+    "researcher": "src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun src/cli.ts start",
+    "test": "bun test",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun src/db/migrate.ts"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "drizzle-orm": "^0.45.1",
+    "pdf-parse": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.13",
+    "drizzle-kit": "^0.31.8",
+    "typescript": "^5.9.3"
+  }
+}

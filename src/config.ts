@@ -23,6 +23,11 @@ export interface ProjectConfig {
   library: {
     sources: SourceConfig[];
   };
+  research?: {
+    agentTypes: string[];
+    strategyFile?: string;
+    reflectEvery?: number;
+  };
   web?: {
     port?: number;
   };

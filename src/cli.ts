@@ -5,13 +5,15 @@ import { basename, resolve } from 'node:path';
 import { SQL } from 'bun';
 import { drizzle } from 'drizzle-orm/bun-sql';
 import { migrate } from 'drizzle-orm/bun-sql/migrator';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, desc } from 'drizzle-orm';
 import { loadConfig, getDatabaseUrl, type ProjectConfig } from './config.js';
 import { initDatabase, getDb, getClient } from './db/connection.js';
-import { documents } from './db/schema.js';
+import { documents, agentTasks, findings } from './db/schema.js';
 import { LLM } from './llm/llm.js';
 import { LibrarySubsystem } from './subsystems/library/index.js';
+import { ResearchSubsystem } from './subsystems/research/index.js';
 import { Orchestrator } from './core/orchestrator.js';
+import { loadState, saveState } from './core/state.js';
 import type { SubsystemContext } from './core/subsystem.js';
 
 const program = new Command();
@@ -80,6 +82,11 @@ program
       },
       library: {
         sources: [],
+      },
+      research: {
+        agentTypes: [],
+        strategyFile: 'research/strategy.md',
+        reflectEvery: 3,
       },
     };
 
@@ -254,6 +261,147 @@ library
     await cleanup();
   });
 
+// ─── research ────────────────────────────────────────────────────────────────
+
+const research = program
+  .command('research')
+  .description('Research pipeline management');
+
+research
+  .command('start')
+  .description('Run research pipeline continuously')
+  .action(async () => {
+    const { ctx, cleanup } = await createContext();
+    const res = new ResearchSubsystem();
+
+    const shutdown = async () => {
+      console.log('\nShutting down research...');
+      await res.stop();
+      await cleanup();
+      process.exit(0);
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+
+    console.log('Starting research pipeline...');
+    await res.start(ctx);
+    await cleanup();
+  });
+
+research
+  .command('update')
+  .description('Run one research cycle')
+  .action(async () => {
+    const { ctx, cleanup } = await createContext();
+    const res = new ResearchSubsystem();
+
+    console.log('Running research update...');
+    await res.update(ctx);
+    await cleanup();
+    console.log('Research update complete.');
+  });
+
+research
+  .command('status')
+  .description('Show task queue and findings count')
+  .action(async () => {
+    const { ctx, cleanup } = await createContext();
+    const res = new ResearchSubsystem();
+
+    const status = await res.status();
+
+    console.log(`\nResearch Status: ${status.state}`);
+    console.log('─'.repeat(40));
+    for (const [key, value] of Object.entries(status.stats)) {
+      console.log(`  ${String(key).padEnd(20)} ${value}`);
+    }
+    if (status.error) {
+      console.log(`  ERROR: ${status.error}`);
+    }
+
+    await cleanup();
+  });
+
+// ─── focus ───────────────────────────────────────────────────────────────────
+
+program
+  .command('focus <topic>')
+  .description('Set research focus')
+  .action(async (topic: string) => {
+    const cwd = process.cwd();
+    const state = await loadState(cwd);
+    state.currentFocus = topic;
+    await saveState(cwd, state);
+    console.log(`Research focus set to: ${topic}`);
+  });
+
+// ─── seed ────────────────────────────────────────────────────────────────────
+
+program
+  .command('seed')
+  .description('Add initial research tasks')
+  .action(async () => {
+    const config = await loadConfig(process.cwd());
+    const agentTypes = config.research?.agentTypes ?? [];
+
+    if (agentTypes.length === 0) {
+      console.error('No agent types configured in researcher.json research.agentTypes.');
+      process.exit(1);
+    }
+
+    const dbUrl = getDatabaseUrl(config);
+    initDatabase(dbUrl);
+    const db = getDb();
+
+    for (const agentType of agentTypes) {
+      await db.insert(agentTasks).values({
+        agentType,
+        status: 'pending',
+        priority: 0,
+        payload: { description: `Initial ${agentType} research task` },
+      });
+      console.log(`  Seeded task for agent: ${agentType}`);
+    }
+
+    console.log(`\nSeeded ${agentTypes.length} initial tasks.`);
+    getClient().close();
+  });
+
+// ─── report ──────────────────────────────────────────────────────────────────
+
+program
+  .command('report')
+  .description('Show recent findings')
+  .option('-n, --count <count>', 'Number of findings to show', '10')
+  .action(async (opts) => {
+    const config = await loadConfig(process.cwd());
+    const dbUrl = getDatabaseUrl(config);
+    initDatabase(dbUrl);
+    const db = getDb();
+
+    const count = parseInt(opts.count, 10);
+    const rows = await db
+      .select()
+      .from(findings)
+      .orderBy(desc(findings.createdAt))
+      .limit(count);
+
+    if (rows.length === 0) {
+      console.log('No findings yet.');
+    } else {
+      console.log(`\nLatest ${rows.length} findings:`);
+      console.log('═'.repeat(60));
+      for (const row of rows) {
+        console.log(`\n[${row.id}] ${row.agentType} (${row.evidenceStrength})`);
+        console.log(`  ${row.finding}`);
+        console.log(`  Created: ${row.createdAt}`);
+      }
+    }
+
+    getClient().close();
+  });
+
 // ─── start (top-level orchestrator) ───────────────────────────────────────────
 
 program
@@ -263,6 +411,7 @@ program
     const { ctx, cleanup } = await createContext();
     const orchestrator = new Orchestrator();
     orchestrator.register(new LibrarySubsystem());
+    orchestrator.register(new ResearchSubsystem());
 
     const shutdown = async () => {
       console.log('\nShutting down all subsystems...');
@@ -298,6 +447,7 @@ program
     const { ctx, cleanup } = await createContext();
     const orchestrator = new Orchestrator();
     orchestrator.register(new LibrarySubsystem());
+    orchestrator.register(new ResearchSubsystem());
 
     const statuses = await orchestrator.statusAll();
 

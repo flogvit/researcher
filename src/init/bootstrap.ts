@@ -54,7 +54,7 @@ async function loadDefaultModuleConfigs(): Promise<Record<string, object>> {
   return configs;
 }
 
-export async function bootstrapProject(domain: string): Promise<BootstrapResult> {
+export async function bootstrapProject(domain: string, language?: string): Promise<BootstrapResult> {
   const llm = new LLM({
     provider: 'claude',
     model: 'opus',
@@ -70,15 +70,21 @@ export async function bootstrapProject(domain: string): Promise<BootstrapResult>
 
   // Step 1: Get project skeleton
   console.log('Step 1: Generating project skeleton...');
+  const langInstruction = language
+    ? `The research output language MUST be "${language}".`
+    : 'Choose the most natural language for the domain based on how it was described.';
+
   const skeleton = await llm.callJSON<SkeletonResult>(`You are setting up an autonomous AI research system for: ${domain}
 
 Generate the project skeleton. Think about what researchers in this field need.
 
+${langInstruction}
+
 1. **name**: Short kebab-case project name (e.g. "biblical-studies")
-2. **description**: One sentence describing the research focus
-3. **language**: ISO code for research output language. Consider what's natural for the domain and how it was described.
+2. **description**: One sentence describing the research focus (in the project language)
+3. **language**: ISO code for research output language. ${langInstruction}
 4. **searchTerms**: 30-60 DOAJ search terms. Be specific and varied — sub-fields, key concepts, methodologies, debates. English for best DOAJ coverage.
-5. **agentNames**: 2-5 kebab-case agent names suited for this domain (e.g. "exegete", "historian", "theologian")
+5. **agentNames**: 2-5 kebab-case agent names suited for this domain (e.g. "exegete", "historian", "theologian"). Names can be in the project language.
 6. **methodNames**: 3-8 kebab-case methodology names relevant to this domain (e.g. "textual-criticism", "comparative-analysis")
 
 Reply with JSON:

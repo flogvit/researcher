@@ -61,7 +61,8 @@ async function createContext(): Promise<{ ctx: SubsystemContext; cleanup: () => 
 program
   .command('init [domain]')
   .description('Initialize a new research project. Provide a domain for AI-bootstrapped setup.')
-  .action(async (domain?: string) => {
+  .option('-l, --language <code>', 'Language for research output (ISO code, e.g. "no", "en", "de")')
+  .action(async (domain: string | undefined, opts: { language?: string }) => {
     const cwd = process.cwd();
     const configPath = resolve(cwd, 'researcher.json');
 
@@ -75,7 +76,7 @@ program
       console.log(`Using existing researcher.json (${config.name})`);
     } else if (domain) {
       // AI-bootstrapped setup
-      const result = await bootstrapProject(domain);
+      const result = await bootstrapProject(domain, opts.language);
 
       config = {
         name: result.name,

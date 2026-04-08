@@ -598,6 +598,17 @@ program
     await cleanup();
   });
 
+// ─── web ────────────────────────────────────────────────────────────────────
+
+program
+  .command('web')
+  .description('Start the web dashboard')
+  .option('--port <port>', 'Port to listen on', '3051')
+  .action(async (opts) => {
+    const { startWebServer } = await import('./web/server.js');
+    startWebServer(parseInt(opts.port), process.cwd());
+  });
+
 // ─── Run ──────────────────────────────────────────────────────────────────────
 
 program.parse();

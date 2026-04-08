@@ -64,37 +64,40 @@ program
     const cwd = process.cwd();
     const configPath = resolve(cwd, 'researcher.json');
 
-    if (existsSync(configPath)) {
-      console.error('Error: researcher.json already exists in this directory.');
-      process.exit(1);
-    }
-
     const dirName = basename(cwd).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
-    const dbName = `researcher_${dirName}`;
 
-    const config: ProjectConfig = {
-      name: dirName,
-      description: '',
-      language: 'en',
-      database: dbName,
-      llm: {
-        provider: 'claude',
-        model: 'sonnet',
-        allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
-      },
-      library: {
-        sources: [],
-      },
-      research: {
-        agentTypes: [],
-        strategyFile: 'research/strategy.md',
-        reflectEvery: 3,
-      },
-    };
+    let config: ProjectConfig;
 
-    // Create researcher.json
-    writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
-    console.log('Created researcher.json');
+    if (existsSync(configPath)) {
+      // Config already exists — just set up database
+      config = await loadConfig(cwd);
+      console.log(`Using existing researcher.json (${config.name})`);
+    } else {
+      // Create default config
+      const dbName = `researcher_${dirName}`;
+      config = {
+        name: dirName,
+        description: '',
+        language: 'en',
+        database: dbName,
+        llm: {
+          provider: 'claude',
+          model: 'sonnet',
+          allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
+        },
+        library: {
+          sources: [],
+        },
+        research: {
+          agentTypes: [],
+          strategyFile: 'research/strategy.md',
+          reflectEvery: 3,
+        },
+      };
+
+      writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+      console.log('Created researcher.json');
+    }
 
     // Create research/ directory with empty strategy.md
     const researchDir = resolve(cwd, 'research');
@@ -105,7 +108,8 @@ program
     if (!existsSync(strategyPath)) {
       writeFileSync(strategyPath, '# Research Strategy\n\n');
     }
-    console.log('Created research/strategy.md');
+
+    const dbName = config.database;
 
     // Create the PostgreSQL database
     console.log(`Creating database "${dbName}"...`);

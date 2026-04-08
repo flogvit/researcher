@@ -126,6 +126,26 @@ program
       mkdirSync(researchDir, { recursive: true });
       writeFileSync(resolve(researchDir, 'strategy.md'), result.strategy);
       console.log('  Created strategy');
+
+      // Write module configs
+      if (result.moduleConfigs) {
+        const modulesDir = resolve(cwd, 'research', 'modules');
+        mkdirSync(modulesDir, { recursive: true });
+        for (const [name, moduleConfig] of Object.entries(result.moduleConfigs)) {
+          writeFileSync(resolve(modulesDir, `${name}.json`), JSON.stringify(moduleConfig, null, 2) + '\n');
+          console.log(`  Created module config: ${name}`);
+        }
+      }
+
+      // Write adapted prompts
+      if (result.prompts) {
+        const promptsDir = resolve(cwd, 'research', 'prompts');
+        mkdirSync(promptsDir, { recursive: true });
+        for (const prompt of result.prompts) {
+          writeFileSync(resolve(promptsDir, `${prompt.name}.md`), prompt.content);
+          console.log(`  Created prompt: ${prompt.name}`);
+        }
+      }
     } else {
       // Create blank defaults
       const dbName = `researcher_${dirName}`;

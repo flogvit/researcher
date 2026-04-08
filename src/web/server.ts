@@ -1,5 +1,5 @@
 import { getDb, initDatabase } from '../db/connection.js';
-import { agentTasks, findings, researchLog, discoveries, documents } from '../db/schema.js';
+import { agentTasks, findings, researchLog, discoveries, documents, projects } from '../db/schema.js';
 import { eq, desc, sql } from 'drizzle-orm';
 import { searchSimilar } from '../llm/embeddings.js';
 import { loadState } from '../core/state.js';
@@ -12,6 +12,8 @@ import { join } from 'node:path';
 let projectDir: string;
 
 const DASHBOARD_HTML = join(import.meta.dir, 'dashboard.html');
+const PROJECTS_HTML = join(import.meta.dir, 'projects.html');
+const PROJECT_HTML = join(import.meta.dir, 'project.html');
 
 async function handleStatus(): Promise<Response> {
   const db = getDb();
@@ -279,9 +281,76 @@ export function startWebServer(port: number, dir: string): void {
             return new Response(res.body, { status: res.status, headers: { ...headers, 'Content-Type': 'application/json' } });
           }
 
+          // ── Project API ──
+          if (url.pathname === '/api/projects' && req.method === 'GET') {
+            const db = getDb();
+            const rows = await db.select().from(projects).orderBy(desc(projects.createdAt));
+            return Response.json(rows, { headers });
+          }
+          if (url.pathname === '/api/projects' && req.method === 'POST') {
+            const db = getDb();
+            const body = await req.json() as { title: string; description?: string };
+            const [project] = await db.insert(projects).values({
+              title: body.title,
+              description: body.description ?? null,
+            }).returning();
+            await db.insert(researchLog).values({
+              eventType: 'project_created', agentType: 'user',
+              details: { projectId: project.id, title: project.title },
+            });
+            return Response.json(project, { headers });
+          }
+          if (url.pathname.match(/^\/api\/projects\/\d+$/) && req.method === 'GET') {
+            const db = getDb();
+            const id = parseInt(url.pathname.split('/').pop()!);
+            const [project] = await db.select().from(projects).where(eq(projects.id, id));
+            if (!project) return new Response('Not found', { status: 404 });
+
+            const projectFindings = await db.select().from(findings)
+              .where(eq(findings.projectId, id)).orderBy(desc(findings.createdAt)).limit(50);
+            const projectTasks = await db.select({
+              pending: sql<number>`count(*) filter (where status = 'pending' and project_id = ${id})`,
+              inProgress: sql<number>`count(*) filter (where status = 'in_progress' and project_id = ${id})`,
+              completed: sql<number>`count(*) filter (where status = 'completed' and project_id = ${id})`,
+            }).from(agentTasks);
+            const projectLog = await db.select().from(researchLog)
+              .where(sql`${researchLog.details}->>'projectId' = ${String(id)}`)
+              .orderBy(desc(researchLog.createdAt)).limit(50);
+
+            return Response.json({
+              ...project,
+              findings: projectFindings,
+              tasks: { pending: Number(projectTasks[0].pending), inProgress: Number(projectTasks[0].inProgress), completed: Number(projectTasks[0].completed) },
+              log: projectLog,
+            }, { headers });
+          }
+          if (url.pathname.match(/^\/api\/projects\/\d+$/) && req.method === 'PATCH') {
+            const db = getDb();
+            const id = parseInt(url.pathname.split('/').pop()!);
+            const body = await req.json() as { status?: string; workers?: number };
+            await db.update(projects).set({ ...body, updatedAt: new Date() }).where(eq(projects.id, id));
+            const [updated] = await db.select().from(projects).where(eq(projects.id, id));
+            return Response.json(updated, { headers });
+          }
+          if (url.pathname.match(/^\/api\/projects\/\d+\/generate$/) && req.method === 'POST') {
+            const db = getDb();
+            const id = parseInt(url.pathname.split('/').pop()!.replace('/generate', ''));
+            await db.insert(researchLog).values({
+              eventType: 'project_generate_requested', agentType: 'user',
+              details: { projectId: id },
+            });
+            return Response.json({ ok: true }, { headers });
+          }
+
           // Pages
           if (url.pathname === '/' || url.pathname === '/index.html') {
             return new Response(Bun.file(DASHBOARD_HTML));
+          }
+          if (url.pathname === '/projects') {
+            return new Response(Bun.file(PROJECTS_HTML));
+          }
+          if (url.pathname.match(/^\/project\/\d+$/)) {
+            return new Response(Bun.file(PROJECT_HTML));
           }
         } catch (err) {
           console.error('API error:', err);

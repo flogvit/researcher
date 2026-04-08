@@ -1,5 +1,5 @@
 import { getDb } from '../../db/connection.js';
-import { discoveries, researchLog } from '../../db/schema.js';
+import { discoveries, researchLog, reviewFeedback } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { LLM } from '../../llm/llm.js';
 import { Logger } from '../../core/logger.js';
@@ -269,6 +269,17 @@ Rewrite the ENTIRE paper. Be honest — it is better to say "this requires furth
       this.log.error(`Peer review failed for "${discovery.title}": ${e instanceof Error ? e.message : e}`);
       return;
     }
+
+    await db.insert(reviewFeedback).values({
+      discoveryId: discovery.id,
+      paperTitle: discovery.title,
+      verdict: review.verdict,
+      quality: review.overallQuality,
+      strengths: review.strengths,
+      weaknesses: review.weaknesses,
+      requiredRevisions: review.requiredRevisions,
+      agentsUsed: null, // TODO: track which agents contributed to this paper
+    });
 
     await db.insert(researchLog).values({
       eventType: 'paper_reviewed',

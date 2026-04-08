@@ -111,13 +111,13 @@ Reply with JSON:
     prompts: [],
   };
 
-  // Step 2: Generate each agent prompt
+  // Step 2: Generate each agent prompt (plain text, not JSON — prompts are too long for JSON wrapping)
   for (const agentName of sk.agentNames) {
     console.log(`Step 2: Generating agent: ${agentName}...`);
-    const resp = await llm.callJSON<SinglePromptResult>(`You are setting up a research agent for the domain: ${domain}
+    const resp = await llm.call(`You are setting up a research agent for the domain: ${domain}
 Project language: ${sk.language}
 
-Create a detailed prompt file for the agent "${agentName}". Write in the project language.
+Create a detailed markdown prompt file for the agent "${agentName}". Write in the project language.
 
 Include:
 - Role description (what this agent does)
@@ -126,17 +126,14 @@ Include:
 - Evidence strength guidelines (speculation, indication, strong_evidence, proven)
 - Output format expectations
 
-Reply with JSON:
-\`\`\`json
-{"content": "full markdown prompt content"}
-\`\`\``);
-    result.agents.push({ name: agentName, prompt: resp.data.content });
+Write ONLY the markdown content. No wrapping, no JSON, no code blocks around it.`);
+    result.agents.push({ name: agentName, prompt: resp.text });
   }
 
   // Step 3: Generate each method
   for (const methodName of sk.methodNames) {
     console.log(`Step 3: Generating method: ${methodName}...`);
-    const resp = await llm.callJSON<SinglePromptResult>(`You are documenting a research methodology for the domain: ${domain}
+    const resp = await llm.call(`You are documenting a research methodology for the domain: ${domain}
 Project language: ${sk.language}
 
 Create a methodology document for "${methodName}". Write in the project language.
@@ -148,16 +145,13 @@ Include:
 - How to apply it in this domain
 - Quality criteria
 
-Reply with JSON:
-\`\`\`json
-{"content": "full markdown content"}
-\`\`\``);
-    result.methods.push({ name: methodName, content: resp.data.content });
+Write ONLY the markdown content. No wrapping, no JSON, no code blocks around it.`);
+    result.methods.push({ name: methodName, content: resp.text });
   }
 
   // Step 4: Generate strategy
   console.log('Step 4: Generating research strategy...');
-  const stratResp = await llm.callJSON<SinglePromptResult>(`You are creating a research strategy for the domain: ${domain}
+  const stratResp = await llm.call(`You are creating a research strategy for the domain: ${domain}
 Project language: ${sk.language}
 Available agents: ${sk.agentNames.join(', ')}
 Available methods: ${sk.methodNames.join(', ')}
@@ -168,16 +162,13 @@ Write a research strategy document in the project language. Include:
 - Epistemological protocol (what each finding must document)
 - 5-6 initial research questions
 
-Reply with JSON:
-\`\`\`json
-{"content": "full markdown strategy document"}
-\`\`\``);
-  result.strategy = stratResp.data.content;
+Write ONLY the markdown content. No wrapping, no JSON, no code blocks around it.`);
+  result.strategy = stratResp.text;
 
   // Step 5: Adapt each default prompt for the domain
   for (const defaultPrompt of defaultPrompts) {
     console.log(`Step 5: Adapting prompt: ${defaultPrompt.name}...`);
-    const resp = await llm.callJSON<SinglePromptResult>(`You are adapting a system prompt for the domain: ${domain}
+    const resp = await llm.call(`You are adapting a system prompt for the domain: ${domain}
 Project language: ${sk.language}
 
 Here is the DEFAULT prompt "${defaultPrompt.name}":
@@ -190,13 +181,10 @@ Adapt this prompt for the domain "${domain}". Make it domain-aware:
 - Adjust terminology to fit the field
 - Write in the project language (${sk.language})
 - Keep the same structure and {{variable}} placeholders
-- Keep the same JSON response format
+- Keep the same JSON response format (the \`\`\`json blocks must be preserved exactly)
 
-Reply with JSON:
-\`\`\`json
-{"content": "full adapted prompt content"}
-\`\`\``);
-    result.prompts.push({ name: defaultPrompt.name, content: resp.data.content });
+Write ONLY the adapted prompt content. No wrapping, no extra commentary.`);
+    result.prompts.push({ name: defaultPrompt.name, content: resp.text });
   }
 
   // Step 6: Generate module configs

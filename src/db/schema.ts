@@ -16,6 +16,7 @@ export const agentTasks = pgTable('agent_tasks', {
   agentType: varchar('agent_type', { length: 100 }).notNull(),
   status: varchar('status', { length: 20 }).notNull().default('pending'),
   priority: integer('priority').notNull().default(0),
+  projectId: integer('project_id'),
   payload: jsonb('payload').notNull(),
   result: jsonb('result'),
   error: text('error'),
@@ -25,6 +26,7 @@ export const agentTasks = pgTable('agent_tasks', {
 }, (table) => [
   index('idx_tasks_status').on(table.status),
   index('idx_tasks_agent_type').on(table.agentType),
+  index('idx_tasks_project').on(table.projectId),
 ]);
 
 // Research findings — immutable append-only log of everything discovered
@@ -32,6 +34,7 @@ export const findings = pgTable('findings', {
   id: serial('id').primaryKey(),
   agentType: varchar('agent_type', { length: 100 }).notNull(),
   taskId: integer('task_id'),
+  projectId: integer('project_id'),
   finding: text('finding').notNull(),
   evidenceStrength: varchar('evidence_strength', { length: 20 }).notNull(),
   reasoning: text('reasoning').notNull(),
@@ -131,3 +134,21 @@ export const documents = pgTable('documents', {
   index('idx_documents_type').on(table.contentType),
   index('idx_documents_plugin').on(table.sourcePlugin),
 ]);
+
+// Research projects — focused research on a specific topic
+// Phases: literature_search → literature_review → identify_gaps → research → paper
+export const projects = pgTable('projects', {
+  id: serial('id').primaryKey(),
+  title: text('title').notNull(),
+  description: text('description'),
+  status: varchar('status', { length: 20 }).notNull().default('active'),
+  phase: varchar('phase', { length: 30 }).notNull().default('literature_search'),
+  workers: integer('workers').notNull().default(2),
+  literatureReview: text('literature_review'),
+  identifiedGaps: jsonb('identified_gaps'),
+  findingsCount: integer('findings_count').notNull().default(0),
+  paperDraft: text('paper_draft'),
+  paperStatus: varchar('paper_status', { length: 20 }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});

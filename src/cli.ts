@@ -5,10 +5,10 @@ import { basename, resolve } from 'node:path';
 import { SQL } from 'bun';
 import { drizzle } from 'drizzle-orm/bun-sql';
 import { migrate } from 'drizzle-orm/bun-sql/migrator';
-import { eq, sql, desc } from 'drizzle-orm';
+import { eq, sql, desc, count, and } from 'drizzle-orm';
 import { loadConfig, getDatabaseUrl, type ProjectConfig } from './config.js';
 import { initDatabase, getDb, getClient } from './db/connection.js';
-import { documents, agentTasks, findings } from './db/schema.js';
+import { documents, agentTasks, findings, projects, researchLog } from './db/schema.js';
 import { LLM } from './llm/llm.js';
 import { LibrarySubsystem } from './subsystems/library/index.js';
 import { ResearchSubsystem } from './subsystems/research/index.js';
@@ -607,6 +607,209 @@ program
   .action(async (opts) => {
     const { startWebServer } = await import('./web/server.js');
     startWebServer(parseInt(opts.port), process.cwd());
+  });
+
+// ─── project ──────────────────────────────────────────────────────────────────
+
+const project = program
+  .command('project')
+  .description('Research project management');
+
+project
+  .command('create [title]')
+  .description('Create a new research project')
+  .option('-d, --description <text>', 'Project description')
+  .option('-f, --file <path>', 'Create from JSON config file')
+  .action(async (title: string | undefined, opts) => {
+    const { ctx, cleanup } = await createContext();
+    const db = ctx.db;
+
+    let projectTitle: string;
+    let projectDescription: string | undefined;
+
+    if (opts.file) {
+      const fileContent = await Bun.file(opts.file).text();
+      const parsed = JSON.parse(fileContent) as { title: string; description?: string };
+      projectTitle = parsed.title;
+      projectDescription = parsed.description;
+    } else {
+      if (!title) {
+        console.error('Error: title is required unless --file is provided.');
+        await cleanup();
+        process.exit(1);
+      }
+      projectTitle = title;
+      projectDescription = opts.description;
+    }
+
+    const [created] = await db.insert(projects).values({
+      title: projectTitle,
+      description: projectDescription ?? null,
+      status: 'active',
+      phase: 'literature_search',
+    }).returning();
+
+    await db.insert(researchLog).values({
+      eventType: 'project_created',
+      details: { projectId: created.id, title: projectTitle, description: projectDescription },
+    });
+
+    console.log(`Project created: [${created.id}] ${created.title}`);
+    console.log(`  Status: ${created.status}`);
+    console.log(`  Phase:  ${created.phase}`);
+    if (created.description) {
+      console.log(`  Description: ${created.description}`);
+    }
+
+    await cleanup();
+  });
+
+project
+  .command('list')
+  .description('List all research projects')
+  .action(async () => {
+    const { ctx, cleanup } = await createContext();
+    const db = ctx.db;
+
+    const rows = await db.select().from(projects).orderBy(projects.id);
+
+    if (rows.length === 0) {
+      console.log('No projects found.');
+      await cleanup();
+      return;
+    }
+
+    const idW = 4;
+    const statusW = 8;
+    const phaseW = 18;
+    const titleW = 28;
+    const findingsW = 8;
+
+    const header =
+      'ID'.padEnd(idW) + '  ' +
+      'Status'.padEnd(statusW) + '  ' +
+      'Phase'.padEnd(phaseW) + '  ' +
+      'Title'.padEnd(titleW) + '  ' +
+      'Findings';
+    console.log('\n' + header);
+    console.log('─'.repeat(header.length));
+
+    for (const row of rows) {
+      console.log(
+        String(row.id).padEnd(idW) + '  ' +
+        (row.status ?? '').padEnd(statusW) + '  ' +
+        (row.phase ?? '').padEnd(phaseW) + '  ' +
+        row.title.slice(0, titleW).padEnd(titleW) + '  ' +
+        String(row.findingsCount ?? 0),
+      );
+    }
+
+    await cleanup();
+  });
+
+project
+  .command('status <id>')
+  .description('Show detailed project info')
+  .action(async (idStr: string) => {
+    const { ctx, cleanup } = await createContext();
+    const db = ctx.db;
+
+    const id = parseInt(idStr, 10);
+    const [proj] = await db.select().from(projects).where(eq(projects.id, id));
+
+    if (!proj) {
+      console.error(`Project ${id} not found.`);
+      await cleanup();
+      process.exit(1);
+    }
+
+    const [pending] = await db
+      .select({ count: count() })
+      .from(agentTasks)
+      .where(and(eq(agentTasks.projectId, id), eq(agentTasks.status, 'pending')));
+
+    const [active] = await db
+      .select({ count: count() })
+      .from(agentTasks)
+      .where(and(eq(agentTasks.projectId, id), eq(agentTasks.status, 'in_progress')));
+
+    console.log(`\nProject [${proj.id}]: ${proj.title}`);
+    console.log('─'.repeat(50));
+    if (proj.description) {
+      console.log(`Description: ${proj.description}`);
+    }
+    console.log(`Status:      ${proj.status}`);
+    console.log(`Phase:       ${proj.phase}`);
+    console.log(`Findings:    ${proj.findingsCount ?? 0}`);
+    console.log(`Tasks:       ${pending?.count ?? 0} pending, ${active?.count ?? 0} active`);
+    if (proj.literatureReview) {
+      console.log(`\nLiterature review (excerpt):`);
+      console.log(`  ${proj.literatureReview.slice(0, 200)}${proj.literatureReview.length > 200 ? '...' : ''}`);
+    }
+    if (proj.paperStatus) {
+      console.log(`\nPaper status: ${proj.paperStatus}`);
+    }
+    console.log(`Created: ${proj.createdAt}`);
+
+    await cleanup();
+  });
+
+project
+  .command('start <id>')
+  .description('Set project status to active')
+  .action(async (idStr: string) => {
+    const { ctx, cleanup } = await createContext();
+    const db = ctx.db;
+
+    const id = parseInt(idStr, 10);
+    const [updated] = await db
+      .update(projects)
+      .set({ status: 'active', updatedAt: new Date() })
+      .where(eq(projects.id, id))
+      .returning();
+
+    if (!updated) {
+      console.error(`Project ${id} not found.`);
+      await cleanup();
+      process.exit(1);
+    }
+
+    await db.insert(researchLog).values({
+      eventType: 'project_started',
+      details: { projectId: id },
+    });
+
+    console.log(`Project [${id}] "${updated.title}" is now active.`);
+    await cleanup();
+  });
+
+project
+  .command('pause <id>')
+  .description('Set project status to paused')
+  .action(async (idStr: string) => {
+    const { ctx, cleanup } = await createContext();
+    const db = ctx.db;
+
+    const id = parseInt(idStr, 10);
+    const [updated] = await db
+      .update(projects)
+      .set({ status: 'paused', updatedAt: new Date() })
+      .where(eq(projects.id, id))
+      .returning();
+
+    if (!updated) {
+      console.error(`Project ${id} not found.`);
+      await cleanup();
+      process.exit(1);
+    }
+
+    await db.insert(researchLog).values({
+      eventType: 'project_paused',
+      details: { projectId: id },
+    });
+
+    console.log(`Project [${id}] "${updated.title}" is now paused.`);
+    await cleanup();
   });
 
 // ─── Run ──────────────────────────────────────────────────────────────────────

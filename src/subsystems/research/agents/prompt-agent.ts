@@ -1,8 +1,6 @@
 import { BaseAgent, type AgentResult, type EvidenceStrength } from './base-agent.js';
 import { LLM } from '../../../llm/llm.js';
-import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { loadPrompt } from '../../../core/prompt-loader.js';
 
 interface PromptAgentResponse {
   finding: string;
@@ -14,19 +12,21 @@ interface PromptAgentResponse {
 export class PromptAgent extends BaseAgent {
   readonly type: string;
   private llm: LLM;
-  private promptPath: string;
+  private projectDir: string;
 
   constructor(type: string, llm: LLM, projectDir: string) {
     super();
     this.type = type;
     this.llm = llm;
-    this.promptPath = resolve(projectDir, 'research', 'agents', `${type}.md`);
+    this.projectDir = projectDir;
   }
 
   async execute(task: Record<string, unknown>): Promise<AgentResult> {
     let agentPrompt = '';
-    if (existsSync(this.promptPath)) {
-      agentPrompt = await readFile(this.promptPath, 'utf-8');
+    try {
+      agentPrompt = await loadPrompt(this.projectDir, this.type);
+    } catch {
+      // No prompt file for this agent type — proceed without
     }
 
     const description = (task.description ?? task.task ?? '') as string;

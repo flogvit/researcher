@@ -1,5 +1,5 @@
 import { LLM } from '../../llm/llm.js';
-import { REVIEW_FINDING } from '../../prompts/defaults.js';
+import { loadPrompt } from '../../core/prompt-loader.js';
 import type { AgentResult } from './agents/base-agent.js';
 
 export interface ReviewResult {
@@ -10,10 +10,11 @@ export interface ReviewResult {
 }
 
 export class Reviewer {
-  constructor(private llm: LLM) {}
+  constructor(private llm: LLM, private projectDir: string) {}
 
   async review(taskDescription: string, result: AgentResult): Promise<ReviewResult> {
-    const prompt = LLM.formatPrompt(REVIEW_FINDING, {
+    const reviewPrompt = await loadPrompt(this.projectDir, 'review');
+    const prompt = LLM.formatPrompt(reviewPrompt, {
       taskDescription,
       finding: result.finding,
       reasoning: result.reasoning,

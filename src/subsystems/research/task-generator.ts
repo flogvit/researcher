@@ -1,5 +1,5 @@
 import { LLM } from '../../llm/llm.js';
-import { GENERATE_WORK } from '../../prompts/defaults.js';
+import { loadPrompt } from '../../core/prompt-loader.js';
 import { readStrategyFile } from '../../core/state.js';
 
 interface GenerateResult {
@@ -8,11 +8,12 @@ interface GenerateResult {
 }
 
 export class TaskGenerator {
-  constructor(private llm: LLM, private strategyPath: string) {}
+  constructor(private llm: LLM, private strategyPath: string, private projectDir: string) {}
 
   async generate(previousFindings: string[], currentFocus: string | null, agentTypes: string[]): Promise<GenerateResult> {
     const rules = await readStrategyFile(this.strategyPath);
-    const prompt = LLM.formatPrompt(GENERATE_WORK, {
+    const generatePrompt = await loadPrompt(this.projectDir, 'generate-work');
+    const prompt = LLM.formatPrompt(generatePrompt, {
       researchRules: rules,
       previousFindings: previousFindings.join('\n') || '(none yet)',
       currentFocus: currentFocus ?? 'none',

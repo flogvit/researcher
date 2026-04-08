@@ -2,7 +2,7 @@ import { getDb } from '../../db/connection.js';
 import { agentTasks, researchLog, findings } from '../../db/schema.js';
 import { desc, sql, eq } from 'drizzle-orm';
 import { LLM } from '../../llm/llm.js';
-import { SUPERVISOR_DIAGNOSE } from '../../prompts/defaults.js';
+import { loadPrompt } from '../../core/prompt-loader.js';
 
 interface SupervisorAction {
   type: 'delete_failed' | 'observation' | 'adjust_strategy';
@@ -19,9 +19,11 @@ interface SupervisorResult {
 
 export class Supervisor {
   private llm: LLM;
+  private projectDir: string;
 
-  constructor(llm: LLM) {
+  constructor(llm: LLM, projectDir: string) {
     this.llm = llm;
+    this.projectDir = projectDir;
   }
 
   async check(): Promise<void> {
@@ -77,7 +79,8 @@ export class Supervisor {
       count: sql<number>`count(*)`,
     }).from(findings);
 
-    const prompt = LLM.formatPrompt(SUPERVISOR_DIAGNOSE, {
+    const supervisorPrompt = await loadPrompt(this.projectDir, 'supervisor');
+    const prompt = LLM.formatPrompt(supervisorPrompt, {
       errors: errorSummaries,
       completed: String(stats.completed),
       failed: String(stats.failed),

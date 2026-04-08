@@ -1,9 +1,11 @@
 import type { SubsystemContext } from '../../core/subsystem.js';
+import type { ModuleConfig } from '../../core/module-config.js';
 import { getDb } from '../../db/connection.js';
 import { agentTasks, findings, researchLog, projects, documents, embeddings } from '../../db/schema.js';
 import { eq, desc, sql, asc, and } from 'drizzle-orm';
 import { LLM, RateLimitError } from '../../llm/llm.js';
 import { Logger } from '../../core/logger.js';
+import { loadPrompt, loadModuleConfig } from '../../core/prompt-loader.js';
 import { Triage } from './triage.js';
 import { Reviewer } from './reviewer.js';
 import { Reflector } from './reflector.js';
@@ -13,29 +15,41 @@ import { PromptAgent } from './agents/prompt-agent.js';
 import type { BaseAgent } from './agents/base-agent.js';
 import { resolve } from 'node:path';
 import { searchSimilar } from '../../llm/embeddings.js';
-import {
-  LITERATURE_REVIEW,
-  IDENTIFY_GAPS,
-  PROJECT_GENERATE_TASKS,
-  WRITE_PROJECT_PAPER,
-} from '../../prompts/project.js';
 
 export class ResearchDispatcher {
   private running = false;
-  private tickInterval = 2000;
   private tasksSinceReflection = 0;
   private lastSupervisorTime = 0;
   private lastGenerateTime = 0;
   private agents: Map<string, BaseAgent> = new Map();
   private log = new Logger('research');
+  private projectDir: string;
+  private moduleConfig: ModuleConfig | null = null;
+
+  constructor() {
+    this.projectDir = process.cwd();
+  }
+
+  private async getModuleConfig(): Promise<ModuleConfig> {
+    if (!this.moduleConfig) {
+      this.moduleConfig = await loadModuleConfig(this.projectDir, 'research');
+    }
+    return this.moduleConfig;
+  }
+
+  private isStepEnabled(config: ModuleConfig, stepName: string): boolean {
+    const step = config.steps.find(s => s.name === stepName);
+    return step?.enabled !== false;
+  }
 
   async start(ctx: SubsystemContext): Promise<void> {
     this.running = true;
+    const config = await this.getModuleConfig();
     this.log.info('Research dispatcher started');
 
     while (this.running) {
       try {
-        await this.tick(ctx);
+        await this.tick(ctx, config);
       } catch (e) {
         if (e instanceof RateLimitError) {
           this.log.warn(`Rate limited. Waiting ${Math.ceil(e.waitMs / 60000)} min...`);
@@ -44,7 +58,7 @@ export class ResearchDispatcher {
           this.log.error(`Tick error: ${e instanceof Error ? e.message : e}`);
         }
       }
-      await Bun.sleep(this.tickInterval);
+      await Bun.sleep(config.tickInterval ?? 2000);
     }
 
     this.log.info('Research dispatcher stopped');
@@ -52,18 +66,19 @@ export class ResearchDispatcher {
 
   async runOnce(ctx: SubsystemContext): Promise<void> {
     this.log.info('Running research (one pass)');
+    const config = await this.getModuleConfig();
 
     // Process all pending tasks
     let processed = true;
     while (processed) {
-      processed = await this.processOneTask(ctx);
+      processed = await this.processOneTask(ctx, config);
     }
 
     // Check project phases
     await this.checkProjects(ctx);
 
     // Reflect if needed
-    if (this.tasksSinceReflection > 0) {
+    if (this.tasksSinceReflection > 0 && this.isStepEnabled(config, 'reflect')) {
       await this.runReflection(ctx);
     }
 
@@ -74,39 +89,44 @@ export class ResearchDispatcher {
     this.running = false;
   }
 
-  private async tick(ctx: SubsystemContext): Promise<void> {
+  private async tick(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {
     if (LLM.isCurrentlyRateLimited()) return;
 
     const now = Date.now();
 
     // Try to process a task
-    const didWork = await this.processOneTask(ctx);
+    const didWork = await this.processOneTask(ctx, config);
 
     if (!didWork) {
       // No tasks — maybe reflect
-      if (this.tasksSinceReflection >= (ctx.config.research?.reflectEvery ?? 3)) {
+      const reflectStep = config.steps.find(s => s.name === 'reflect');
+      const reflectEvery = reflectStep?.every ?? ctx.config.research?.reflectEvery ?? 3;
+      if (this.isStepEnabled(config, 'reflect') && this.tasksSinceReflection >= reflectEvery) {
         await this.runReflection(ctx);
         return;
       }
 
       // Or generate work
-      await this.runGenerateWork(ctx);
+      if (this.isStepEnabled(config, 'generate-work')) {
+        await this.runGenerateWork(ctx);
+      }
     }
 
     // Check project phases
     await this.checkProjects(ctx);
 
-    // Supervisor every 5 min
-    if (now - this.lastSupervisorTime > 300_000) {
+    // Supervisor
+    const supervisorStep = config.steps.find(s => s.name === 'supervisor');
+    const supervisorInterval = (supervisorStep?.every ?? 300) * 1000;
+    if (this.isStepEnabled(config, 'supervisor') && now - this.lastSupervisorTime > supervisorInterval) {
       this.lastSupervisorTime = now;
       await this.runSupervisor(ctx);
     }
   }
 
-  private async processOneTask(ctx: SubsystemContext): Promise<boolean> {
+  private async processOneTask(ctx: SubsystemContext, config: ModuleConfig): Promise<boolean> {
     const db = getDb();
     const llm = new LLM(ctx.config.llm);
-    const projectDir = process.cwd();
 
     // Pick oldest pending task
     const [task] = await db
@@ -128,9 +148,9 @@ export class ResearchDispatcher {
 
     // Triage (skip for split children)
     const isSplitChild = (task.payload as Record<string, unknown>)?.fromSplit === true;
-    if (!isSplitChild) {
+    if (!isSplitChild && this.isStepEnabled(config, 'triage')) {
       try {
-        const triage = new Triage(llm);
+        const triage = new Triage(llm, this.projectDir);
         const triageResult = await triage.evaluate(task.agentType, String(taskDescription));
 
         if (triageResult.verdict === 'split' && triageResult.subtasks?.length) {
@@ -165,81 +185,86 @@ export class ResearchDispatcher {
     }
 
     // Execute
-    try {
-      const agent = this.getAgent(task.agentType, llm, projectDir);
-      const result = await agent.execute(task.payload as Record<string, unknown>);
-
-      // Review
-      let reviewQuality = 'unreviewed';
+    if (this.isStepEnabled(config, 'execute')) {
       try {
-        const reviewer = new Reviewer(llm);
-        const review = await reviewer.review(String(taskDescription), result);
-        reviewQuality = review.quality;
-        if (!review.approved) {
-          result.evidenceStrength = 'speculation';
+        const agent = this.getAgent(task.agentType, llm);
+        const result = await agent.execute(task.payload as Record<string, unknown>);
+
+        // Review
+        let reviewQuality = 'unreviewed';
+        if (this.isStepEnabled(config, 'review')) {
+          try {
+            const reviewer = new Reviewer(llm, this.projectDir);
+            const review = await reviewer.review(String(taskDescription), result);
+            reviewQuality = review.quality;
+            if (!review.approved) {
+              result.evidenceStrength = 'speculation';
+            }
+          } catch {
+            // Review failed, keep original strength
+          }
         }
-      } catch {
-        // Review failed, keep original strength
-      }
 
-      // Save finding
-      await db.insert(findings).values({
-        agentType: task.agentType,
-        taskId: task.id,
-        finding: result.finding,
-        evidenceStrength: result.evidenceStrength,
-        reasoning: result.reasoning,
-        sources: result.sources,
-        metadata: { ...result.metadata ?? {}, reviewQuality },
-      });
-
-      // Mark task completed
-      await db.update(agentTasks)
-        .set({ status: 'completed', result, completedAt: new Date() })
-        .where(eq(agentTasks.id, task.id));
-
-      await db.insert(researchLog).values({
-        eventType: 'task_completed',
-        agentType: task.agentType,
-        details: {
+        // Save finding
+        await db.insert(findings).values({
+          agentType: task.agentType,
           taskId: task.id,
-          description: taskDescription,
           finding: result.finding,
           evidenceStrength: result.evidenceStrength,
-          reviewQuality,
-        },
-      });
+          reasoning: result.reasoning,
+          sources: result.sources,
+          metadata: { ...result.metadata ?? {}, reviewQuality },
+        });
 
-      this.tasksSinceReflection++;
-      this.log.info(`Task ${task.id} completed (${task.agentType}): ${result.evidenceStrength}`);
-      return true;
-    } catch (error) {
-      if (error instanceof RateLimitError) throw error;
+        // Mark task completed
+        await db.update(agentTasks)
+          .set({ status: 'completed', result, completedAt: new Date() })
+          .where(eq(agentTasks.id, task.id));
 
-      const message = error instanceof Error ? error.message : String(error);
-      await db.update(agentTasks)
-        .set({ status: 'failed', error: message, completedAt: new Date() })
-        .where(eq(agentTasks.id, task.id));
-      await db.insert(researchLog).values({
-        eventType: 'task_failed',
-        agentType: task.agentType,
-        details: { taskId: task.id, description: taskDescription, error: message },
-      });
-      this.log.error(`Task ${task.id} failed: ${message}`);
-      return true;
+        await db.insert(researchLog).values({
+          eventType: 'task_completed',
+          agentType: task.agentType,
+          details: {
+            taskId: task.id,
+            description: taskDescription,
+            finding: result.finding,
+            evidenceStrength: result.evidenceStrength,
+            reviewQuality,
+          },
+        });
+
+        this.tasksSinceReflection++;
+        this.log.info(`Task ${task.id} completed (${task.agentType}): ${result.evidenceStrength}`);
+        return true;
+      } catch (error) {
+        if (error instanceof RateLimitError) throw error;
+
+        const message = error instanceof Error ? error.message : String(error);
+        await db.update(agentTasks)
+          .set({ status: 'failed', error: message, completedAt: new Date() })
+          .where(eq(agentTasks.id, task.id));
+        await db.insert(researchLog).values({
+          eventType: 'task_failed',
+          agentType: task.agentType,
+          details: { taskId: task.id, description: taskDescription, error: message },
+        });
+        this.log.error(`Task ${task.id} failed: ${message}`);
+        return true;
+      }
     }
+
+    return false;
   }
 
   private async runReflection(ctx: SubsystemContext): Promise<void> {
     const db = getDb();
     const llm = new LLM(ctx.config.llm);
-    const projectDir = process.cwd();
     const agentTypes = ctx.config.research?.agentTypes ?? [];
-    const strategyPath = resolve(projectDir, ctx.config.research?.strategyFile ?? 'research/strategy.md');
+    const strategyPath = resolve(this.projectDir, ctx.config.research?.strategyFile ?? 'research/strategy.md');
 
     this.tasksSinceReflection = 0;
 
-    const reflector = new Reflector(llm, strategyPath);
+    const reflector = new Reflector(llm, strategyPath, this.projectDir);
     const recentFindings = await db.select().from(findings).orderBy(desc(findings.createdAt)).limit(10);
 
     const reflection = await reflector.reflect(
@@ -274,9 +299,8 @@ export class ResearchDispatcher {
     this.lastGenerateTime = now;
 
     const llm = new LLM(ctx.config.llm);
-    const projectDir = process.cwd();
     const agentTypes = ctx.config.research?.agentTypes ?? [];
-    const strategyPath = resolve(projectDir, ctx.config.research?.strategyFile ?? 'research/strategy.md');
+    const strategyPath = resolve(this.projectDir, ctx.config.research?.strategyFile ?? 'research/strategy.md');
 
     const recentFindings = await db
       .select({ finding: findings.finding })
@@ -284,7 +308,7 @@ export class ResearchDispatcher {
       .orderBy(desc(findings.createdAt))
       .limit(10);
 
-    const generator = new TaskGenerator(llm, strategyPath);
+    const generator = new TaskGenerator(llm, strategyPath, this.projectDir);
     const result = await generator.generate(
       recentFindings.map(f => f.finding),
       null,
@@ -311,7 +335,7 @@ export class ResearchDispatcher {
 
   private async runSupervisor(ctx: SubsystemContext): Promise<void> {
     const llm = new LLM(ctx.config.llm);
-    const supervisor = new Supervisor(llm);
+    const supervisor = new Supervisor(llm, this.projectDir);
     await supervisor.check();
   }
 
@@ -488,7 +512,8 @@ export class ResearchDispatcher {
       `- ${m.title}${m.author ? ` (${m.author})` : ''}: ${(m.summary || m.content || '').slice(0, 300)}`,
     ).join('\n');
 
-    const prompt = LLM.formatPrompt(LITERATURE_REVIEW, {
+    const litReviewPrompt = await loadPrompt(this.projectDir, 'literature-review');
+    const prompt = LLM.formatPrompt(litReviewPrompt, {
       title: project.title,
       count: String(uniqueDocs.length),
       materials: materialSummaries || '(no materials found)',
@@ -524,7 +549,8 @@ export class ResearchDispatcher {
     const db = getDb();
     const llm = new LLM(ctx.config.llm);
 
-    const prompt = LLM.formatPrompt(IDENTIFY_GAPS, {
+    const gapsPrompt = await loadPrompt(this.projectDir, 'identify-gaps');
+    const prompt = LLM.formatPrompt(gapsPrompt, {
       title: project.title,
       literatureReview: project.literatureReview || '(no review available)',
     });
@@ -573,6 +599,7 @@ export class ResearchDispatcher {
   ): Promise<void> {
     const db = getDb();
     const llm = new LLM(ctx.config.llm);
+    const config = await this.getModuleConfig();
 
     // Check if we have enough findings to write a paper
     const [count] = await db
@@ -584,7 +611,7 @@ export class ResearchDispatcher {
     await db.update(projects).set({ findingsCount: findingCount, updatedAt: new Date() })
       .where(eq(projects.id, project.id));
 
-    if (findingCount >= 5) {
+    if (findingCount >= (config.minFindings ?? 5)) {
       await db.update(projects).set({ phase: 'paper', updatedAt: new Date() })
         .where(eq(projects.id, project.id));
       this.log.info(`Project "${project.title}": ${findingCount} findings. Moving to paper.`);
@@ -605,7 +632,8 @@ export class ResearchDispatcher {
       .where(eq(findings.projectId, project.id))
       .limit(10);
 
-    const prompt = LLM.formatPrompt(PROJECT_GENERATE_TASKS, {
+    const genTasksPrompt = await loadPrompt(this.projectDir, 'project-generate-tasks');
+    const prompt = LLM.formatPrompt(genTasksPrompt, {
       title: project.title,
       gaps: gaps.map((g, i) => `${i + 1}. ${g.title}: ${g.description}`).join('\n'),
       findingCount: String(findingCount),
@@ -647,7 +675,8 @@ export class ResearchDispatcher {
       .orderBy(desc(findings.createdAt))
       .limit(20);
 
-    const prompt = LLM.formatPrompt(WRITE_PROJECT_PAPER, {
+    const paperPrompt = await loadPrompt(this.projectDir, 'write-project-paper');
+    const prompt = LLM.formatPrompt(paperPrompt, {
       title: project.title,
       literatureReview: (project.literatureReview || '').slice(0, 3000),
       gaps: JSON.stringify(project.identifiedGaps, null, 2),
@@ -677,11 +706,11 @@ export class ResearchDispatcher {
     this.log.info(`Project "${project.title}": paper written (${response.text.length} chars).`);
   }
 
-  private getAgent(agentType: string, llm: LLM, projectDir: string): BaseAgent {
+  private getAgent(agentType: string, llm: LLM): BaseAgent {
     const cached = this.agents.get(agentType);
     if (cached) return cached;
 
-    const agent = new PromptAgent(agentType, llm, projectDir);
+    const agent = new PromptAgent(agentType, llm, this.projectDir);
     this.agents.set(agentType, agent);
     return agent;
   }

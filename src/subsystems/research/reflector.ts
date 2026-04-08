@@ -1,5 +1,5 @@
 import { LLM } from '../../llm/llm.js';
-import { REFLECT } from '../../prompts/defaults.js';
+import { loadPrompt } from '../../core/prompt-loader.js';
 import { readStrategyFile } from '../../core/state.js';
 
 interface ReflectionResult {
@@ -10,11 +10,12 @@ interface ReflectionResult {
 }
 
 export class Reflector {
-  constructor(private llm: LLM, private strategyPath: string) {}
+  constructor(private llm: LLM, private strategyPath: string, private projectDir: string) {}
 
   async reflect(completedTasks: Array<{ agentType: string; result: string }>, agentTypes: string[]): Promise<ReflectionResult> {
     const rules = await readStrategyFile(this.strategyPath);
-    const prompt = LLM.formatPrompt(REFLECT, {
+    const reflectPrompt = await loadPrompt(this.projectDir, 'reflect');
+    const prompt = LLM.formatPrompt(reflectPrompt, {
       researchRules: rules,
       completedTasks: JSON.stringify(completedTasks, null, 2),
       agentTypes: agentTypes.map(t => `- "${t}"`).join('\n'),

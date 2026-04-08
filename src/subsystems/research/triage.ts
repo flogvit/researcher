@@ -1,5 +1,5 @@
 import { LLM } from '../../llm/llm.js';
-import { TRIAGE_TASK } from '../../prompts/defaults.js';
+import { loadPrompt } from '../../core/prompt-loader.js';
 
 export interface TriageResult {
   verdict: 'proceed' | 'split' | 'skip';
@@ -8,10 +8,11 @@ export interface TriageResult {
 }
 
 export class Triage {
-  constructor(private llm: LLM) {}
+  constructor(private llm: LLM, private projectDir: string) {}
 
   async evaluate(agentType: string, description: string): Promise<TriageResult> {
-    const prompt = LLM.formatPrompt(TRIAGE_TASK, { agentType, description });
+    const triagePrompt = await loadPrompt(this.projectDir, 'triage');
+    const prompt = LLM.formatPrompt(triagePrompt, { agentType, description });
     try {
       const response = await this.llm.callJSON<TriageResult>(prompt);
       return response.data;

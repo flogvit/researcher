@@ -12,6 +12,8 @@ import { documents, agentTasks, findings } from './db/schema.js';
 import { LLM } from './llm/llm.js';
 import { LibrarySubsystem } from './subsystems/library/index.js';
 import { ResearchSubsystem } from './subsystems/research/index.js';
+import { DiscoverySubsystem } from './subsystems/discovery/index.js';
+import { PaperSubsystem } from './subsystems/paper/index.js';
 import { Orchestrator } from './core/orchestrator.js';
 import { loadState, saveState } from './core/state.js';
 import type { SubsystemContext } from './core/subsystem.js';
@@ -323,6 +325,130 @@ research
     await cleanup();
   });
 
+// ─── discovery ────────────────────────────────────────────────────────────────
+
+const discovery = program
+  .command('discovery')
+  .description('Discovery pipeline management');
+
+discovery
+  .command('start')
+  .description('Run discovery pipeline continuously')
+  .action(async () => {
+    const { ctx, cleanup } = await createContext();
+    const disc = new DiscoverySubsystem();
+
+    const shutdown = async () => {
+      console.log('\nShutting down discovery...');
+      await disc.stop();
+      await cleanup();
+      process.exit(0);
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+
+    console.log('Starting discovery pipeline...');
+    await disc.start(ctx);
+    await cleanup();
+  });
+
+discovery
+  .command('update')
+  .description('Run one discovery pass')
+  .action(async () => {
+    const { ctx, cleanup } = await createContext();
+    const disc = new DiscoverySubsystem();
+
+    console.log('Running discovery update...');
+    await disc.update(ctx);
+    await cleanup();
+    console.log('Discovery update complete.');
+  });
+
+discovery
+  .command('status')
+  .description('Show discovery counts by status')
+  .action(async () => {
+    const { ctx, cleanup } = await createContext();
+    const disc = new DiscoverySubsystem();
+
+    const status = await disc.status();
+
+    console.log(`\nDiscovery Status: ${status.state}`);
+    console.log('─'.repeat(40));
+    for (const [key, value] of Object.entries(status.stats)) {
+      console.log(`  ${String(key).padEnd(20)} ${value}`);
+    }
+    if (status.error) {
+      console.log(`  ERROR: ${status.error}`);
+    }
+
+    await cleanup();
+  });
+
+// ─── paper ────────────────────────────────────────────────────────────────────
+
+const paper = program
+  .command('paper')
+  .description('Paper pipeline management');
+
+paper
+  .command('start')
+  .description('Run paper pipeline continuously')
+  .action(async () => {
+    const { ctx, cleanup } = await createContext();
+    const pap = new PaperSubsystem();
+
+    const shutdown = async () => {
+      console.log('\nShutting down paper...');
+      await pap.stop();
+      await cleanup();
+      process.exit(0);
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+
+    console.log('Starting paper pipeline...');
+    await pap.start(ctx);
+    await cleanup();
+  });
+
+paper
+  .command('update')
+  .description('Run one paper pass')
+  .action(async () => {
+    const { ctx, cleanup } = await createContext();
+    const pap = new PaperSubsystem();
+
+    console.log('Running paper update...');
+    await pap.update(ctx);
+    await cleanup();
+    console.log('Paper update complete.');
+  });
+
+paper
+  .command('status')
+  .description('Show paper counts by status')
+  .action(async () => {
+    const { ctx, cleanup } = await createContext();
+    const pap = new PaperSubsystem();
+
+    const status = await pap.status();
+
+    console.log(`\nPaper Status: ${status.state}`);
+    console.log('─'.repeat(40));
+    for (const [key, value] of Object.entries(status.stats)) {
+      console.log(`  ${String(key).padEnd(20)} ${value}`);
+    }
+    if (status.error) {
+      console.log(`  ERROR: ${status.error}`);
+    }
+
+    await cleanup();
+  });
+
 // ─── focus ───────────────────────────────────────────────────────────────────
 
 program
@@ -412,6 +538,8 @@ program
     const orchestrator = new Orchestrator();
     orchestrator.register(new LibrarySubsystem());
     orchestrator.register(new ResearchSubsystem());
+    orchestrator.register(new DiscoverySubsystem());
+    orchestrator.register(new PaperSubsystem());
 
     const shutdown = async () => {
       console.log('\nShutting down all subsystems...');
@@ -448,6 +576,8 @@ program
     const orchestrator = new Orchestrator();
     orchestrator.register(new LibrarySubsystem());
     orchestrator.register(new ResearchSubsystem());
+    orchestrator.register(new DiscoverySubsystem());
+    orchestrator.register(new PaperSubsystem());
 
     const statuses = await orchestrator.statusAll();
 

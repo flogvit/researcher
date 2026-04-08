@@ -84,7 +84,7 @@ program
         database: `researcher_${result.name.replace(/-/g, '_')}`,
         llm: {
           provider: 'claude',
-          model: 'sonnet',
+          model: 'opus',
           allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
         },
         library: {
@@ -136,7 +136,7 @@ program
         database: dbName,
         llm: {
           provider: 'claude',
-          model: 'sonnet',
+          model: 'opus',
           allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
         },
         library: {

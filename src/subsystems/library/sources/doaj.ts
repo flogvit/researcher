@@ -69,13 +69,13 @@ async function downloadTerm(term: string): Promise<{ added: number; total: numbe
       await db.insert(documents).values({
         url: articleUrl,
         title: bib.title,
-        content: bib.abstract ?? null,
         contentType: 'article',
         author: bib.author?.map(a => a.name).join(', ') ?? null,
         publicationYear: bib.year ? parseInt(bib.year) : null,
         peerReviewed: 'yes',
         sourceCredibility: 'academic',
         sourcePlugin: 'doaj',
+        domainMetadata: bib.abstract ? { abstract: bib.abstract } : null,
         status: 'metadata',
       });
       added++;

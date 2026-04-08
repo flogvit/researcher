@@ -1,7 +1,7 @@
 import { getDb } from '../../../db/connection.js';
 import { documents } from '../../../db/schema.js';
 import { eq } from 'drizzle-orm';
-import { LLM } from '../../../llm/llm.js';
+import { LLM, RateLimitError } from '../../../llm/llm.js';
 import { CLASSIFY_DOCUMENT } from '../../../prompts/defaults.js';
 
 interface ClassificationResult {
@@ -66,6 +66,7 @@ export async function processNext(llm: LLM): Promise<boolean> {
 
     console.log(`  Classified: ${item.title.slice(0, 60)}`);
   } catch (e) {
+    if (e instanceof RateLimitError) throw e; // Let dispatcher handle rate limits
     console.error(`  Classification failed for ${item.id}:`, e instanceof Error ? e.message : e);
     await db.update(documents)
       .set({ status: 'failed_classify' })

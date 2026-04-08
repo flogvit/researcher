@@ -120,7 +120,8 @@ program
     const dbUrl = `postgresql://postgres@localhost:5432/${dbName}`;
     const migrationClient = new SQL(dbUrl);
     const db = drizzle({ client: migrationClient });
-    await migrate(db, { migrationsFolder: resolve(cwd, 'drizzle') });
+    const packageRoot = resolve(import.meta.dir, '..'); // src/ -> package root
+    await migrate(db, { migrationsFolder: resolve(packageRoot, 'drizzle') });
     migrationClient.close();
     console.log('Migrations complete.');
 

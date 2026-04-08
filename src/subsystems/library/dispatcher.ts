@@ -26,6 +26,10 @@ export class LibraryDispatcher {
     // Run sources on startup
     await this.runSources(ctx);
 
+    // Mark documents without URLs as failed (can't download them)
+    const noUrl = await downloader.markNoUrl();
+    if (noUrl > 0) this.log.info(`Marked ${noUrl} documents without URL as failed`);
+
     while (this.running) {
       await this.tick(ctx);
       await Bun.sleep(this.tickInterval);
@@ -74,7 +78,9 @@ export class LibraryDispatcher {
     await downloader.processNext();
     await extractor.processNext();
     const llm = ctx.llm as LLM;
-    await classifier.processNext(llm);
+    if (!LLM.isCurrentlyRateLimited()) {
+      await classifier.processNext(llm);
+    }
     await embedder.processNext();
   }
 

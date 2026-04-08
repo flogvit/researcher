@@ -119,6 +119,8 @@ program
     console.log('Running migrations...');
     const dbUrl = `postgresql://postgres@localhost:5432/${dbName}`;
     const migrationClient = new SQL(dbUrl);
+    // Ensure pgvector extension exists
+    await migrationClient.unsafe('CREATE EXTENSION IF NOT EXISTS vector');
     const db = drizzle({ client: migrationClient });
     const packageRoot = resolve(import.meta.dir, '..'); // src/ -> package root
     await migrate(db, { migrationsFolder: resolve(packageRoot, 'drizzle') });

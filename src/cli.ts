@@ -7,6 +7,7 @@ import { drizzle } from 'drizzle-orm/bun-sql';
 import { migrate } from 'drizzle-orm/bun-sql/migrator';
 import { eq, sql, desc, count, and } from 'drizzle-orm';
 import { loadConfig, getDatabaseUrl, type ProjectConfig } from './config.js';
+import { bootstrapProject } from './init/bootstrap.js';
 import { initDatabase, getDb, getClient } from './db/connection.js';
 import { documents, agentTasks, findings, projects, researchLog } from './db/schema.js';
 import { LLM } from './llm/llm.js';
@@ -58,9 +59,9 @@ async function createContext(): Promise<{ ctx: SubsystemContext; cleanup: () => 
 // ─── init ─────────────────────────────────────────────────────────────────────
 
 program
-  .command('init')
-  .description('Initialize a new research project in the current directory')
-  .action(async () => {
+  .command('init [domain]')
+  .description('Initialize a new research project. Provide a domain for AI-bootstrapped setup.')
+  .action(async (domain?: string) => {
     const cwd = process.cwd();
     const configPath = resolve(cwd, 'researcher.json');
 
@@ -72,8 +73,61 @@ program
       // Config already exists — just set up database
       config = await loadConfig(cwd);
       console.log(`Using existing researcher.json (${config.name})`);
+    } else if (domain) {
+      // AI-bootstrapped setup
+      const result = await bootstrapProject(domain);
+
+      config = {
+        name: result.name,
+        description: result.description,
+        language: result.language,
+        database: `researcher_${result.name.replace(/-/g, '_')}`,
+        llm: {
+          provider: 'claude',
+          model: 'sonnet',
+          allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
+        },
+        library: {
+          sources: [{
+            type: 'doaj',
+            enabled: true,
+            interval: 86400,
+            settings: { searchTerms: result.searchTerms },
+          }],
+        },
+        research: {
+          agentTypes: result.agents.map(a => a.name),
+          strategyFile: 'research/strategy.md',
+          reflectEvery: 3,
+        },
+      };
+
+      writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+      console.log('Created researcher.json');
+
+      // Write agents
+      const agentsDir = resolve(cwd, 'research', 'agents');
+      mkdirSync(agentsDir, { recursive: true });
+      for (const agent of result.agents) {
+        writeFileSync(resolve(agentsDir, `${agent.name}.md`), agent.prompt);
+        console.log(`  Created agent: ${agent.name}`);
+      }
+
+      // Write methods
+      const methodsDir = resolve(cwd, 'research', 'methods');
+      mkdirSync(methodsDir, { recursive: true });
+      for (const method of result.methods) {
+        writeFileSync(resolve(methodsDir, `${method.name}.md`), method.content);
+        console.log(`  Created method: ${method.name}`);
+      }
+
+      // Write strategy
+      const researchDir = resolve(cwd, 'research');
+      mkdirSync(researchDir, { recursive: true });
+      writeFileSync(resolve(researchDir, 'strategy.md'), result.strategy);
+      console.log('  Created strategy');
     } else {
-      // Create default config
+      // Create blank defaults
       const dbName = `researcher_${dirName}`;
       config = {
         name: dirName,
@@ -99,7 +153,7 @@ program
       console.log('Created researcher.json');
     }
 
-    // Create research/ directory with empty strategy.md
+    // Create research/ directory with empty strategy.md (if not already created by bootstrap)
     const researchDir = resolve(cwd, 'research');
     if (!existsSync(researchDir)) {
       mkdirSync(researchDir, { recursive: true });
@@ -140,11 +194,17 @@ program
     migrationClient.close();
     console.log('Migrations complete.');
 
-    console.log(`\nProject "${dirName}" initialized successfully.`);
-    console.log('Next steps:');
-    console.log('  1. Edit researcher.json to configure sources');
-    console.log('  2. Edit research/strategy.md to define your research focus');
-    console.log('  3. Run "researcher library start" to begin collecting documents');
+    console.log(`\nProject "${config.name}" initialized successfully.`);
+    if (domain) {
+      console.log('Next steps:');
+      console.log('  1. Review researcher.json and research/ files');
+      console.log('  2. Run "researcher library start" to begin collecting documents');
+    } else {
+      console.log('Next steps:');
+      console.log('  1. Edit researcher.json to configure sources');
+      console.log('  2. Edit research/strategy.md to define your research focus');
+      console.log('  3. Run "researcher library start" to begin collecting documents');
+    }
   });
 
 // ─── library ──────────────────────────────────────────────────────────────────

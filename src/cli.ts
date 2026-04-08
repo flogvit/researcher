@@ -227,6 +227,7 @@ program
       console.log('  1. Edit researcher.json to configure sources');
       console.log('  2. Run "researcher library start" to begin collecting documents');
     }
+    process.exit(0);
   });
 
 // ─── library ──────────────────────────────────────────────────────────────────

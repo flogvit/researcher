@@ -8,6 +8,7 @@ import {
   varchar,
   index,
   vector,
+  boolean,
 } from 'drizzle-orm/pg-core';
 
 // Task queue for agents
@@ -151,4 +152,19 @@ export const projects = pgTable('projects', {
   paperStatus: varchar('paper_status', { length: 20 }),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+// Review feedback — accumulated paper review results for learning loop
+export const reviewFeedback = pgTable('review_feedback', {
+  id: serial('id').primaryKey(),
+  discoveryId: integer('discovery_id').notNull(),
+  paperTitle: text('paper_title').notNull(),
+  verdict: varchar('verdict', { length: 20 }).notNull(),
+  quality: varchar('quality', { length: 20 }),
+  strengths: jsonb('strengths'),
+  weaknesses: jsonb('weaknesses'),
+  requiredRevisions: jsonb('required_revisions'),
+  agentsUsed: jsonb('agents_used'),
+  processedByLearner: boolean('processed_by_learner').notNull().default(false),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
 });

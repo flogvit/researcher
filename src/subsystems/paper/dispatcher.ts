@@ -47,7 +47,8 @@ export class PaperDispatcher {
 
     const db = getDb();
     const llm = new LLM(ctx.config.llm);
-    const pipeline = new PaperPipeline(llm);
+    const projectDir = process.cwd();
+    const pipeline = new PaperPipeline(llm, projectDir);
 
     // 1. Domain review for pending discoveries
     const [pendingReview] = await db

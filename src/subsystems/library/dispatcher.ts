@@ -61,7 +61,7 @@ export class LibraryDispatcher {
 
       // Classify
       const llm = ctx.llm as LLM;
-      if (await classifier.processNext(llm)) { processed = true; continue; }
+      if (await classifier.processNext(llm, process.cwd())) { processed = true; continue; }
 
       // Embed
       if (await embedder.processNext()) { processed = true; continue; }
@@ -79,7 +79,7 @@ export class LibraryDispatcher {
     await extractor.processNext();
     const llm = ctx.llm as LLM;
     if (!LLM.isCurrentlyRateLimited()) {
-      await classifier.processNext(llm);
+      await classifier.processNext(llm, process.cwd());
     }
     await embedder.processNext();
   }

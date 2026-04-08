@@ -3,14 +3,7 @@ import { discoveries, researchLog } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { LLM } from '../../llm/llm.js';
 import { Logger } from '../../core/logger.js';
-import {
-  DOMAIN_REVIEW,
-  WRITE_PAPER,
-  ORIGINALITY_CHECK,
-  REFERENCE_CHECK,
-  PEER_REVIEW,
-  REVISE_PAPER,
-} from '../../prompts/paper.js';
+import { loadPrompt } from '../../core/prompt-loader.js';
 
 interface DomainReviewResult {
   alignment: string;
@@ -55,7 +48,7 @@ interface LitSearchResult {
 export class PaperPipeline {
   private log = new Logger('paper');
 
-  constructor(private llm: LLM) {}
+  constructor(private llm: LLM, private projectDir: string) {}
 
   async domainReview(discovery: typeof discoveries.$inferSelect): Promise<void> {
     this.log.info(`Domain review for: "${discovery.title}"...`);
@@ -63,7 +56,8 @@ export class PaperPipeline {
     const db = getDb();
     const litSearch = discovery.literatureSearch as LitSearchResult | null;
 
-    const prompt = LLM.formatPrompt(DOMAIN_REVIEW, {
+    const template = await loadPrompt(this.projectDir, 'domain-review');
+    const prompt = LLM.formatPrompt(template, {
       title: discovery.title,
       claim: discovery.claim,
       existingResearch: litSearch
@@ -105,7 +99,8 @@ export class PaperPipeline {
     const db = getDb();
     const [current] = await db.select().from(discoveries).where(eq(discoveries.id, discovery.id));
 
-    const prompt = LLM.formatPrompt(WRITE_PAPER, {
+    const writeTemplate = await loadPrompt(this.projectDir, 'write-paper');
+    const prompt = LLM.formatPrompt(writeTemplate, {
       title: current.title,
       claim: current.claim,
       literatureSearch: JSON.stringify(current.literatureSearch, null, 2),
@@ -147,7 +142,8 @@ export class PaperPipeline {
 
     // Step 1: Originality check
     try {
-      const origPrompt = LLM.formatPrompt(ORIGINALITY_CHECK, {
+      const origTemplate = await loadPrompt(this.projectDir, 'originality-check');
+      const origPrompt = LLM.formatPrompt(origTemplate, {
         title: discovery.title,
         claim: discovery.claim,
         paper: (discovery.paper ?? '').slice(0, 4000),
@@ -187,7 +183,8 @@ export class PaperPipeline {
 
     // Step 2: Reference verification
     try {
-      const refPrompt = LLM.formatPrompt(REFERENCE_CHECK, {
+      const refTemplate = await loadPrompt(this.projectDir, 'reference-check');
+      const refPrompt = LLM.formatPrompt(refTemplate, {
         paper: discovery.paper ?? '',
       });
 
@@ -257,7 +254,8 @@ Rewrite the ENTIRE paper. Be honest — it is better to say "this requires furth
     }
 
     // Step 3: Peer review
-    const reviewPrompt = LLM.formatPrompt(PEER_REVIEW, {
+    const reviewTemplate = await loadPrompt(this.projectDir, 'peer-review');
+    const reviewPrompt = LLM.formatPrompt(reviewTemplate, {
       title: discovery.title,
       paper: (discovery.paper ?? '').slice(0, 8000),
       domainReview: JSON.stringify(discovery.domainReview, null, 2),
@@ -313,7 +311,8 @@ Rewrite the ENTIRE paper. Be honest — it is better to say "this requires furth
 
     this.log.info(`Revising paper: "${discovery.title}" (${review.requiredRevisions.length} revisions)...`);
 
-    const revisePrompt = LLM.formatPrompt(REVISE_PAPER, {
+    const reviseTemplate = await loadPrompt(this.projectDir, 'revise-paper');
+    const revisePrompt = LLM.formatPrompt(reviseTemplate, {
       title: discovery.title,
       paper: discovery.paper ?? '',
       review: JSON.stringify(review, null, 2),

@@ -2,7 +2,7 @@ import { getDb } from '../../db/connection.js';
 import { findings, discoveries, researchLog } from '../../db/schema.js';
 import { desc, sql } from 'drizzle-orm';
 import { LLM } from '../../llm/llm.js';
-import { SYNTHESIS_CLUSTER } from '../../prompts/discovery.js';
+import { loadPrompt } from '../../core/prompt-loader.js';
 import { Logger } from '../../core/logger.js';
 
 interface Cluster {
@@ -21,10 +21,12 @@ interface SynthesisResult {
 
 export class SynthesisAgent {
   private llm: LLM;
+  private projectDir: string;
   private log = new Logger('synthesis');
 
-  constructor(llm: LLM) {
+  constructor(llm: LLM, projectDir: string) {
     this.llm = llm;
+    this.projectDir = projectDir;
   }
 
   async synthesize(): Promise<SynthesisResult | null> {
@@ -42,7 +44,8 @@ export class SynthesisAgent {
       `[Finding #${f.id}] [${f.evidenceStrength}] ${f.agentType}: ${f.finding}`
     ).join('\n\n');
 
-    const prompt = LLM.formatPrompt(SYNTHESIS_CLUSTER, {
+    const template = await loadPrompt(this.projectDir, 'synthesize');
+    const prompt = LLM.formatPrompt(template, {
       findings: findingSummaries,
     });
 

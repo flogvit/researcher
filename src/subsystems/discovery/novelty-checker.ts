@@ -2,7 +2,7 @@ import { getDb } from '../../db/connection.js';
 import { findings, discoveries, researchLog } from '../../db/schema.js';
 import { eq, desc, sql, and } from 'drizzle-orm';
 import { LLM } from '../../llm/llm.js';
-import { NOVELTY_CHECK, LITERATURE_SEARCH } from '../../prompts/discovery.js';
+import { loadPrompt } from '../../core/prompt-loader.js';
 import { Logger } from '../../core/logger.js';
 
 interface NoveltyResult {
@@ -21,10 +21,12 @@ interface LitSearchResult {
 
 export class NoveltyChecker {
   private llm: LLM;
+  private projectDir: string;
   private log = new Logger('novelty');
 
-  constructor(llm: LLM) {
+  constructor(llm: LLM, projectDir: string) {
     this.llm = llm;
+    this.projectDir = projectDir;
   }
 
   /**
@@ -58,7 +60,8 @@ export class NoveltyChecker {
     const db = getDb();
     this.log.info(`Evaluating finding ${finding.id} for novelty...`);
 
-    const noveltyPrompt = LLM.formatPrompt(NOVELTY_CHECK, {
+    const noveltyTemplate = await loadPrompt(this.projectDir, 'novelty-check');
+    const noveltyPrompt = LLM.formatPrompt(noveltyTemplate, {
       finding: finding.finding,
       evidenceStrength: finding.evidenceStrength,
       reasoning: finding.reasoning,
@@ -137,7 +140,8 @@ export class NoveltyChecker {
     const db = getDb();
     this.log.info(`Searching literature for: "${discovery.title}"...`);
 
-    const prompt = LLM.formatPrompt(LITERATURE_SEARCH, {
+    const template = await loadPrompt(this.projectDir, 'literature-search');
+    const prompt = LLM.formatPrompt(template, {
       title: discovery.title,
       claim: discovery.claim,
     });

@@ -2,7 +2,7 @@ import { getDb } from '../../../db/connection.js';
 import { documents } from '../../../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { LLM, RateLimitError } from '../../../llm/llm.js';
-import { CLASSIFY_DOCUMENT } from '../../../prompts/defaults.js';
+import { loadPrompt } from '../../../core/prompt-loader.js';
 
 interface ClassificationResult {
   summary: string;
@@ -21,7 +21,7 @@ interface ClassificationResult {
  * Process the next document waiting to be classified.
  * Returns true if a document was processed, false if nothing to do.
  */
-export async function processNext(llm: LLM): Promise<boolean> {
+export async function processNext(llm: LLM, projectDir: string = process.cwd()): Promise<boolean> {
   const db = getDb();
 
   const [item] = await db
@@ -38,7 +38,8 @@ export async function processNext(llm: LLM): Promise<boolean> {
   if (!item || !item.content) return false;
 
   try {
-    const prompt = LLM.formatPrompt(CLASSIFY_DOCUMENT, {
+    const template = await loadPrompt(projectDir, 'classify');
+    const prompt = LLM.formatPrompt(template, {
       title: item.title,
       contentType: item.contentType,
       content: item.content.slice(0, 3000),

@@ -50,12 +50,14 @@ export class DiscoveryDispatcher {
 
     if (Number(findingCount.count) < 5) return;
 
+    const projectDir = process.cwd();
+
     // 1. Run synthesis to find clusters
-    const synthesis = new SynthesisAgent(llm);
+    const synthesis = new SynthesisAgent(llm, projectDir);
     await synthesis.synthesize();
 
     // 2. Run novelty checker on strong findings not yet evaluated
-    const noveltyChecker = new NoveltyChecker(llm);
+    const noveltyChecker = new NoveltyChecker(llm, projectDir);
     await noveltyChecker.scanForDiscoveries();
 
     // 3. Run literature search on discoveries pending verification

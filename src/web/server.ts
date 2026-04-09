@@ -87,17 +87,17 @@ async function handleRules(): Promise<Response> {
     });
   }
 
-  // Agent instructions
-  const agentsDir = join(researchDir, 'agents');
-  if (existsSync(agentsDir)) {
-    for (const file of await readdir(agentsDir)) {
+  // Prompts (agents + system prompts)
+  const promptsDir = join(researchDir, 'prompts');
+  if (existsSync(promptsDir)) {
+    for (const file of await readdir(promptsDir)) {
       if (file.endsWith('.md')) {
-        const content = await readFile(join(agentsDir, file), 'utf-8');
+        const content = await readFile(join(promptsDir, file), 'utf-8');
         files.push({
-          path: `research/agents/${file}`,
+          path: `research/prompts/${file}`,
           name: file.replace('.md', '').replace(/-/g, ' '),
           content,
-          category: 'agent',
+          category: 'prompt',
         });
       }
     }

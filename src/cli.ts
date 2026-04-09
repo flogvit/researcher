@@ -131,11 +131,11 @@ program
         writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
         console.log('Created researcher.json');
 
-        // Write all bootstrap output
+        // Write all bootstrap output — agents go to prompts/ (same as all other prompts)
+        const promptsDir = resolve(cwd, 'research', 'prompts');
+        mkdirSync(promptsDir, { recursive: true });
         for (const agent of result.agents) {
-          const dir = resolve(cwd, 'research', 'agents');
-          mkdirSync(dir, { recursive: true });
-          writeFileSync(resolve(dir, `${agent.name}.md`), agent.prompt);
+          writeFileSync(resolve(promptsDir, `${agent.name}.md`), agent.prompt);
           console.log(`  Created agent: ${agent.name}`);
         }
         for (const method of result.methods) {

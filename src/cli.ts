@@ -6,18 +6,19 @@ import { SQL } from 'bun';
 import { drizzle } from 'drizzle-orm/bun-sql';
 import { migrate } from 'drizzle-orm/bun-sql/migrator';
 import { eq, sql, desc, count, and } from 'drizzle-orm';
-import { loadConfig, getDatabaseUrl, type ProjectConfig } from './config.js';
-import { bootstrapProject } from './init/bootstrap.js';
-import { initDatabase, getDb, getClient } from './db/connection.js';
-import { documents, agentTasks, findings, projects, researchLog } from './db/schema.js';
-import { LLM } from './llm/llm.js';
-import { LibrarySubsystem } from './subsystems/library/index.js';
-import { ResearchSubsystem } from './subsystems/research/index.js';
-import { DiscoverySubsystem } from './subsystems/discovery/index.js';
-import { PaperSubsystem } from './subsystems/paper/index.js';
-import { Orchestrator } from './core/orchestrator.js';
-import { loadState, saveState } from './core/state.js';
-import type { SubsystemContext } from './core/subsystem.js';
+import { loadConfig, getDatabaseUrl, type ProjectConfig } from './config';
+import { bootstrapProject } from './init/bootstrap';
+import { initDatabase, getDb, getClient } from './db/connection';
+import { documents, agentTasks, findings, projects, researchLog } from './db/schema';
+import { LLM, createLLM } from './llm/llm';
+import { initEmbeddingConfig } from './llm/embeddings';
+import { LibrarySubsystem } from './subsystems/library/index';
+import { ResearchSubsystem } from './subsystems/research/index';
+import { DiscoverySubsystem } from './subsystems/discovery/index';
+import { PaperSubsystem } from './subsystems/paper/index';
+import { Orchestrator } from './core/orchestrator';
+import { loadState, saveState } from './core/state';
+import type { SubsystemContext } from './core/subsystem';
 
 const program = new Command();
 
@@ -32,6 +33,7 @@ async function createContext(): Promise<{ ctx: SubsystemContext; cleanup: () => 
   const config = await loadConfig(process.cwd());
   const dbUrl = getDatabaseUrl(config);
   initDatabase(dbUrl);
+  initEmbeddingConfig(config);
 
   const llm = new LLM({
     provider: config.llm.provider,
@@ -615,42 +617,26 @@ program
     getClient().close();
   });
 
-// ─── start (top-level orchestrator) ───────────────────────────────────────────
+// ─── start (web UI + API + subsystem management) ────────────────────────────
 
 program
   .command('start')
-  .description('Start all subsystems')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const orchestrator = new Orchestrator();
-    orchestrator.register(new LibrarySubsystem());
-    orchestrator.register(new ResearchSubsystem());
-    orchestrator.register(new DiscoverySubsystem());
-    orchestrator.register(new PaperSubsystem());
-
-    const shutdown = async () => {
-      console.log('\nShutting down all subsystems...');
-      await orchestrator.stopAll();
-      await cleanup();
-      process.exit(0);
-    };
-
+  .description('Start researcher (web UI, API, subsystem management, admin queue)')
+  .option('--port <port>', 'Port to listen on', '3051')
+  .action(async (opts) => {
+    const { resolve } = await import('node:path');
+    const port = parseInt(opts.port);
+    const webDir = resolve(import.meta.dir, '..', 'web');
+    const nextProc = Bun.spawn(['bun', '--bun', 'next', 'dev', '-p', String(port)], {
+      cwd: webDir,
+      env: { ...process.env, RESEARCHER_PROJECT_DIR: process.cwd() },
+      stdout: 'inherit',
+      stderr: 'inherit',
+    });
+    console.log(`\nResearcher running at http://localhost:${port}\n`);
+    const shutdown = () => { nextProc.kill(); process.exit(0); };
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
-
-    console.log('Starting all subsystems...');
-    await orchestrator.startAll(ctx);
-    await cleanup();
-  });
-
-// ─── stop ─────────────────────────────────────────────────────────────────────
-
-program
-  .command('stop')
-  .description('Stop all subsystems')
-  .action(async () => {
-    console.log('To stop a running researcher process, use:');
-    console.log('  pkill -f "bun src/cli"');
   });
 
 // ─── status ───────────────────────────────────────────────────────────────────
@@ -685,15 +671,107 @@ program
     await cleanup();
   });
 
-// ─── web ────────────────────────────────────────────────────────────────────
+// ─── upgrade ─────────────────────────────────────────────────────────────────
 
 program
-  .command('web')
-  .description('Start the web dashboard')
-  .option('--port <port>', 'Port to listen on', '3051')
+  .command('upgrade')
+  .description('Upgrade project config, module configs, prompts, and run migrations')
+  .action(async () => {
+    const { upgradeProject } = await import('./core/upgrade.js');
+    const result = await upgradeProject(process.cwd());
+
+    console.log('\nUpgrade complete:');
+    if (result.configUpdated.length > 0)
+      console.log(`  Config: added ${result.configUpdated.join(', ')}`);
+    if (result.moduleConfigsUpdated.length > 0)
+      console.log(`  Modules: ${result.moduleConfigsUpdated.join('; ')}`);
+    if (result.promptsAdded.length > 0)
+      console.log(`  Prompts: added ${result.promptsAdded.join(', ')}`);
+    if (result.filesMoved.length > 0)
+      console.log(`  Moved: ${result.filesMoved.join('; ')}`);
+    if (result.migrationsRun)
+      console.log('  Database: migrations applied');
+    if (result.warnings.length > 0) {
+      console.log('  Warnings:');
+      for (const w of result.warnings) console.log(`    - ${w}`);
+    }
+    if (result.configUpdated.length === 0 && result.moduleConfigsUpdated.length === 0 &&
+        result.promptsAdded.length === 0 && result.filesMoved.length === 0) {
+      console.log('  Everything up to date.');
+    }
+  });
+
+// ─── queue ───────────────────────────────────────────────────────────────────
+
+program
+  .command('queue')
+  .description('Show pending tasks in the queue')
+  .option('-w, --watch', 'Watch mode — refresh every 2 seconds')
   .action(async (opts) => {
-    const { startWebServer } = await import('./web/server.js');
-    startWebServer(parseInt(opts.port), process.cwd());
+    const { ctx, cleanup } = await createContext();
+    const db = ctx.db;
+
+    const showQueue = async () => {
+      const tasks = await db
+        .select()
+        .from(agentTasks)
+        .where(sql`${agentTasks.status} IN ('pending', 'in_progress')`)
+        .orderBy(agentTasks.createdAt)
+        .limit(50);
+
+      if (!opts.watch) {
+        if (tasks.length === 0) {
+          console.log('Queue is empty.');
+        } else {
+          console.log(`\nQueue: ${tasks.length} tasks`);
+          console.log('─'.repeat(60));
+          for (const t of tasks) {
+            const desc = (t.payload as Record<string, unknown>)?.description ?? 'unknown';
+            console.log(`  [${t.id}] ${t.agentType} (${t.status}) — ${String(desc).slice(0, 50)}`);
+          }
+        }
+        await cleanup();
+        return;
+      }
+
+      // Watch mode
+      process.stdout.write('\x1B[2J\x1B[H'); // clear screen
+      console.log(`Queue: ${tasks.length} tasks (watching...)`);
+      console.log('─'.repeat(60));
+      for (const t of tasks) {
+        const desc = (t.payload as Record<string, unknown>)?.description ?? 'unknown';
+        console.log(`  [${t.id}] ${t.agentType} (${t.status}) — ${String(desc).slice(0, 50)}`);
+      }
+    };
+
+    if (opts.watch) {
+      const shutdown = async () => { await cleanup(); process.exit(0); };
+      process.on('SIGINT', shutdown);
+      process.on('SIGTERM', shutdown);
+      while (true) {
+        await showQueue();
+        await Bun.sleep(2000);
+      }
+    } else {
+      await showQueue();
+    }
+  });
+
+// ─── learn ───────────────────────────────────────────────────────────────────
+
+program
+  .command('learn')
+  .description('Force a learning cycle from accumulated review feedback')
+  .action(async () => {
+    const { ctx, cleanup } = await createContext();
+    const { Learner } = await import('./core/learner.js');
+    const { loadModuleConfig } = await import('./core/prompt-loader.js');
+    const paperConfig = await loadModuleConfig(process.cwd(), 'paper');
+    const llm = createLLM('learner', ctx.config.llm, ctx.config.agents);
+    const learner = new Learner(llm, process.cwd(), paperConfig);
+    const result = await learner.forceLearn();
+    console.log(result ? 'Learning cycle completed.' : 'No reviews to learn from.');
+    await cleanup();
   });
 
 // ─── project ──────────────────────────────────────────────────────────────────

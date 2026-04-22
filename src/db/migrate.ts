@@ -2,7 +2,7 @@ import { SQL } from 'bun';
 import { drizzle } from 'drizzle-orm/bun-sql';
 import { migrate } from 'drizzle-orm/bun-sql/migrator';
 import { resolve } from 'node:path';
-import { loadConfig, getDatabaseUrl } from '../config.js';
+import { loadConfig, getDatabaseUrl } from '../config';
 
 async function main() {
   const config = await loadConfig(process.cwd());

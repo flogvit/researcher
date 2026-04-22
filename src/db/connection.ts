@@ -1,6 +1,6 @@
 import { SQL } from 'bun';
 import { drizzle } from 'drizzle-orm/bun-sql';
-import * as schema from './schema.js';
+import * as schema from './schema';
 
 let _db: ReturnType<typeof drizzle<typeof schema>> | null = null;
 let _client: InstanceType<typeof SQL> | null = null;

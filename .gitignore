@@ -2,3 +2,11 @@ node_modules/
 dist/
 .idea/
 .researcher-state.json
+
+# Next.js build artifacts
+.next/
+web/node_modules/
+web/tsconfig.tsbuildinfo
+
+# Playwright MCP traces
+.playwright-mcp/

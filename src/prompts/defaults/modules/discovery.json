@@ -1,0 +1,13 @@
+{
+  "tickInterval": 5000,
+  "minFindings": 5,
+  "rateLimitRecoveryCap": 60000,
+  "batchSize": 50,
+  "maxTasksPerCycle": 5,
+  "semanticSearchLimit": 5,
+  "steps": [
+    { "name": "synthesis",   "enabled": true },
+    { "name": "novelty",     "enabled": true, "batchSize": 5 },
+    { "name": "lit-search",  "enabled": true, "batchSize": 3 }
+  ]
+}

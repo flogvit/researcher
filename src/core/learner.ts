@@ -1,14 +1,15 @@
-import { getDb } from '../db/connection.js';
-import { reviewFeedback, agentTasks, researchLog } from '../db/schema.js';
+import { getDb } from '../db/connection';
+import { reviewFeedback, agentTasks, researchLog } from '../db/schema';
 import { eq, desc, sql } from 'drizzle-orm';
-import { LLM } from '../llm/llm.js';
-import { loadPrompt } from './prompt-loader.js';
-import { Logger } from './logger.js';
+import { LLM } from '../llm/llm';
+import { loadPrompt } from './prompt-loader';
+import { Logger } from './logger';
+import type { ModuleConfig } from './module-config';
 import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const REVIEW_THRESHOLD = 10;
+const DEFAULT_REVIEW_THRESHOLD = 10;
 
 interface Proposal {
   type: 'modify_prompt' | 'add_agent' | 'modify_config';
@@ -32,10 +33,12 @@ export class Learner {
   private llm: LLM;
   private projectDir: string;
   private log = new Logger('learner');
+  private config?: ModuleConfig;
 
-  constructor(llm: LLM, projectDir: string) {
+  constructor(llm: LLM, projectDir: string, config?: ModuleConfig) {
     this.llm = llm;
     this.projectDir = projectDir;
+    this.config = config;
   }
 
   /**
@@ -50,9 +53,28 @@ export class Learner {
       .from(reviewFeedback)
       .where(eq(reviewFeedback.processedByLearner, false));
 
-    if (Number(count.count) < REVIEW_THRESHOLD) return false;
+    const threshold = this.config?.reviewThreshold ?? DEFAULT_REVIEW_THRESHOLD;
+    if (Number(count.count) < threshold) return false;
 
     this.log.info(`${count.count} unprocessed reviews — running learning cycle`);
+    await this.learn();
+    return true;
+  }
+
+  /**
+   * Force a learning cycle regardless of threshold.
+   * Returns true if there were any reviews to process.
+   */
+  async forceLearn(): Promise<boolean> {
+    const db = getDb();
+    const [count] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(reviewFeedback)
+      .where(eq(reviewFeedback.processedByLearner, false));
+
+    if (Number(count.count) === 0) return false;
+
+    this.log.info(`Force learning: ${count.count} unprocessed reviews`);
     await this.learn();
     return true;
   }
@@ -116,15 +138,29 @@ export class Learner {
     let rejected = 0;
 
     for (const proposal of analysis.data.proposals) {
-      if (proposal.type !== 'modify_prompt' || !proposal.newContent) {
-        this.log.info(`Skipping non-prompt proposal: ${proposal.type} ${proposal.target}`);
-        continue;
-      }
-
-      const result = await this.testProposal(proposal);
-      if (result) {
-        applied++;
+      if (proposal.type === 'modify_prompt' && proposal.newContent) {
+        const result = await this.testProposal(proposal);
+        if (result) { applied++; } else { rejected++; }
+      } else if (proposal.type === 'add_agent' && proposal.newContent) {
+        const promptPath = resolve(this.projectDir, 'research', 'prompts', `${proposal.target}.md`);
+        if (!existsSync(promptPath)) {
+          await writeFile(promptPath, proposal.newContent);
+          this.log.info(`Added new agent prompt: ${proposal.target}`);
+          applied++;
+        } else {
+          this.log.info(`Agent ${proposal.target} already exists, skipping`);
+          rejected++;
+        }
+      } else if (proposal.type === 'modify_config') {
+        this.log.info(`Config modification proposed: ${proposal.target} — ${proposal.description} (requires manual review)`);
+        await db.insert(researchLog).values({
+          eventType: 'learner_config_proposal',
+          agentType: 'learner',
+          details: { proposal: proposal.description, target: proposal.target, reasoning: proposal.reasoning },
+        });
+        rejected++; // Don't auto-apply config changes
       } else {
+        this.log.info(`Skipping unsupported proposal: ${proposal.type} ${proposal.target}`);
         rejected++;
       }
     }

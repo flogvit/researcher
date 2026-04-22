@@ -1,6 +1,6 @@
-import { BaseAgent, type AgentResult, type EvidenceStrength } from './base-agent.js';
-import { LLM } from '../../../llm/llm.js';
-import { loadPrompt } from '../../../core/prompt-loader.js';
+import { BaseAgent, type AgentResult, type EvidenceStrength } from './base-agent';
+import { LLM } from '../../../llm/llm';
+import { loadPrompt } from '../../../core/prompt-loader';
 
 interface PromptAgentResponse {
   finding: string;

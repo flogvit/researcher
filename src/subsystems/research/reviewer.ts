@@ -1,6 +1,6 @@
-import { LLM } from '../../llm/llm.js';
-import { loadPrompt } from '../../core/prompt-loader.js';
-import type { AgentResult } from './agents/base-agent.js';
+import { LLM } from '../../llm/llm';
+import { loadPrompt } from '../../core/prompt-loader';
+import type { AgentResult } from './agents/base-agent';
 
 export interface ReviewResult {
   approved: boolean;

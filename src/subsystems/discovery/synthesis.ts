@@ -1,9 +1,10 @@
-import { getDb } from '../../db/connection.js';
-import { findings, discoveries, researchLog } from '../../db/schema.js';
+import { getDb } from '../../db/connection';
+import { findings, discoveries, researchLog } from '../../db/schema';
 import { desc, sql } from 'drizzle-orm';
-import { LLM } from '../../llm/llm.js';
-import { loadPrompt } from '../../core/prompt-loader.js';
-import { Logger } from '../../core/logger.js';
+import { LLM } from '../../llm/llm';
+import { loadPrompt } from '../../core/prompt-loader';
+import { Logger } from '../../core/logger';
+import type { ModuleConfig } from '../../core/module-config';
 
 interface Cluster {
   title: string;
@@ -23,10 +24,12 @@ export class SynthesisAgent {
   private llm: LLM;
   private projectDir: string;
   private log = new Logger('synthesis');
+  private config?: ModuleConfig;
 
-  constructor(llm: LLM, projectDir: string) {
+  constructor(llm: LLM, projectDir: string, config?: ModuleConfig) {
     this.llm = llm;
     this.projectDir = projectDir;
+    this.config = config;
   }
 
   async synthesize(): Promise<SynthesisResult | null> {
@@ -36,9 +39,9 @@ export class SynthesisAgent {
       .select()
       .from(findings)
       .orderBy(desc(findings.createdAt))
-      .limit(50);
+      .limit(this.config?.batchSize ?? 50);
 
-    if (allFindings.length < 5) return null;
+    if (allFindings.length < (this.config?.minFindings ?? 5)) return null;
 
     const findingSummaries = allFindings.map(f =>
       `[Finding #${f.id}] [${f.evidenceStrength}] ${f.agentType}: ${f.finding}`

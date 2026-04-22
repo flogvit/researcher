@@ -1,8 +1,9 @@
-import { getDb } from '../../../db/connection.js';
-import { documents } from '../../../db/schema.js';
+import { getDb } from '../../../db/connection';
+import { documents } from '../../../db/schema';
 import { eq } from 'drizzle-orm';
-import { LLM, RateLimitError } from '../../../llm/llm.js';
-import { loadPrompt } from '../../../core/prompt-loader.js';
+import { LLM, RateLimitError } from '../../../llm/llm';
+import { loadPrompt } from '../../../core/prompt-loader';
+import type { ModuleConfig } from '../../../core/module-config';
 
 interface ClassificationResult {
   summary: string;
@@ -21,7 +22,7 @@ interface ClassificationResult {
  * Process the next document waiting to be classified.
  * Returns true if a document was processed, false if nothing to do.
  */
-export async function processNext(llm: LLM, projectDir: string = process.cwd()): Promise<boolean> {
+export async function processNext(llm: LLM, projectDir: string = process.cwd(), config?: ModuleConfig): Promise<boolean> {
   const db = getDb();
 
   const [item] = await db
@@ -42,7 +43,7 @@ export async function processNext(llm: LLM, projectDir: string = process.cwd()):
     const prompt = LLM.formatPrompt(template, {
       title: item.title,
       contentType: item.contentType,
-      content: item.content.slice(0, 3000),
+      content: item.content.slice(0, config?.classifyContentLimit ?? 3000),
     });
 
     const response = await llm.callJSON<ClassificationResult>(prompt);

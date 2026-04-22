@@ -1,7 +1,7 @@
-import type { Subsystem, SubsystemContext, SubsystemStatus } from '../../core/subsystem.js';
-import { PaperDispatcher } from './dispatcher.js';
-import { getDb } from '../../db/connection.js';
-import { discoveries } from '../../db/schema.js';
+import type { Subsystem, SubsystemContext, SubsystemStatus } from '../../core/subsystem';
+import { PaperDispatcher } from './dispatcher';
+import { getDb } from '../../db/connection';
+import { discoveries } from '../../db/schema';
 import { sql } from 'drizzle-orm';
 
 export class PaperSubsystem implements Subsystem {

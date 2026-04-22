@@ -1,7 +1,7 @@
-import type { Subsystem, SubsystemContext, SubsystemStatus } from '../../core/subsystem.js';
-import { ResearchDispatcher } from './dispatcher.js';
-import { getDb } from '../../db/connection.js';
-import { agentTasks, findings } from '../../db/schema.js';
+import type { Subsystem, SubsystemContext, SubsystemStatus } from '../../core/subsystem';
+import { ResearchDispatcher } from './dispatcher';
+import { getDb } from '../../db/connection';
+import { agentTasks, findings } from '../../db/schema';
 import { sql } from 'drizzle-orm';
 
 export class ResearchSubsystem implements Subsystem {

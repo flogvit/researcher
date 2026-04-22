@@ -1,9 +1,11 @@
-import { getDb } from '../../../db/connection.js';
-import { documents } from '../../../db/schema.js';
+import { getDb } from '../../../db/connection';
+import { documents } from '../../../db/schema';
 import { eq } from 'drizzle-orm';
+import type { ModuleConfig } from '../../../core/module-config';
 
-const MIN_CONTENT_LENGTH = 2000;
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'gemma3:27b';
+const DEFAULT_MIN_CONTENT = 2000;
+const DEFAULT_HTML_LIMIT = 15000;
+const DEFAULT_EXTRACTOR_MODEL = process.env.OLLAMA_MODEL ?? 'gemma3:27b';
 
 function stripHTML(html: string): string {
   return html
@@ -33,8 +35,8 @@ async function extractPDF(base64Content: string): Promise<string | null> {
   }
 }
 
-async function askOllamaForLink(html: string, originalUrl: string): Promise<string | null> {
-  const truncatedHtml = html.slice(0, 15000);
+async function askOllamaForLink(html: string, originalUrl: string, htmlLimit = DEFAULT_HTML_LIMIT, model = DEFAULT_EXTRACTOR_MODEL): Promise<string | null> {
+  const truncatedHtml = html.slice(0, htmlLimit);
   const prompt = `This is an academic article landing page. Find the URL to the full text article (not PDF).
 Look for links like "View Full Text", "Read Article", "Full Text HTML", "View Article", or similar.
 The page URL is: ${originalUrl}
@@ -45,7 +47,7 @@ HTML:
 ${truncatedHtml}`;
 
   try {
-    const proc = Bun.spawn(['ollama', 'run', OLLAMA_MODEL], {
+    const proc = Bun.spawn(['ollama', 'run', model], {
       stdin: new Response(prompt),
       stdout: 'pipe',
       stderr: 'pipe',
@@ -82,7 +84,7 @@ async function fetchUrl(url: string): Promise<{ html: string; contentType: strin
  * Process the next document waiting for text extraction.
  * Returns true if a document was processed, false if nothing to do.
  */
-export async function processNext(): Promise<boolean> {
+export async function processNext(config?: ModuleConfig): Promise<boolean> {
   const db = getDb();
 
   const [item] = await db
@@ -109,8 +111,11 @@ export async function processNext(): Promise<boolean> {
       text = stripHTML(item.rawContent);
 
       // If too short, probably a landing page — try Ollama to find real link
-      if (text.length < MIN_CONTENT_LENGTH && item.url) {
-        const articleLink = await askOllamaForLink(item.rawContent, item.url);
+      const minContent = config?.extractorMinContent ?? DEFAULT_MIN_CONTENT;
+      if (text.length < minContent && item.url) {
+        const htmlLimit = config?.extractorHtmlLimit ?? DEFAULT_HTML_LIMIT;
+        const model = config?.extractorModel ?? DEFAULT_EXTRACTOR_MODEL;
+        const articleLink = await askOllamaForLink(item.rawContent, item.url, htmlLimit, model);
         if (articleLink) {
           const article = await fetchUrl(articleLink);
           if (article) {

@@ -1,8 +1,8 @@
-import { getDb } from '../../db/connection.js';
-import { agentTasks, researchLog, findings } from '../../db/schema.js';
+import { getDb } from '../../db/connection';
+import { agentTasks, researchLog, findings } from '../../db/schema';
 import { desc, sql, eq } from 'drizzle-orm';
-import { LLM } from '../../llm/llm.js';
-import { loadPrompt } from '../../core/prompt-loader.js';
+import { LLM } from '../../llm/llm';
+import { loadPrompt } from '../../core/prompt-loader';
 
 interface SupervisorAction {
   type: 'delete_failed' | 'observation' | 'adjust_strategy';

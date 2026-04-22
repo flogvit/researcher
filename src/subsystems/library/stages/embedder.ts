@@ -1,13 +1,14 @@
-import { getDb } from '../../../db/connection.js';
-import { documents, embeddings } from '../../../db/schema.js';
+import { getDb } from '../../../db/connection';
+import { documents, embeddings } from '../../../db/schema';
 import { eq } from 'drizzle-orm';
-import { generateEmbedding } from '../../../llm/embeddings.js';
+import { generateEmbedding } from '../../../llm/embeddings';
+import type { ModuleConfig } from '../../../core/module-config';
 
 /**
  * Process the next document waiting to be embedded.
  * Returns true if a document was processed, false if nothing to do.
  */
-export async function processNext(): Promise<boolean> {
+export async function processNext(config?: ModuleConfig): Promise<boolean> {
   const db = getDb();
 
   const [item] = await db

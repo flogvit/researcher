@@ -1,21 +1,34 @@
-import type { SubsystemContext } from '../../core/subsystem.js';
-import { getDb } from '../../db/connection.js';
-import { discoveries } from '../../db/schema.js';
+import type { SubsystemContext } from '../../core/subsystem';
+import type { ModuleConfig } from '../../core/module-config';
+import { loadModuleConfig } from '../../core/prompt-loader';
+import { getDb } from '../../db/connection';
+import { discoveries } from '../../db/schema';
 import { sql } from 'drizzle-orm';
-import { LLM, RateLimitError } from '../../llm/llm.js';
-import { Logger } from '../../core/logger.js';
-import { PaperPipeline } from './pipeline.js';
-import { Learner } from '../../core/learner.js';
+import { LLM, RateLimitError, createLLM } from '../../llm/llm';
+import { Logger } from '../../core/logger';
+import { PaperPipeline } from './pipeline';
+import { Learner } from '../../core/learner';
 
 export class PaperDispatcher {
   private running = false;
   private tickInterval = 5000;
   private log = new Logger('paper');
   private learner: Learner | null = null;
+  private moduleConfig: ModuleConfig | null = null;
+
+  private async getModuleConfig(): Promise<ModuleConfig> {
+    if (!this.moduleConfig) {
+      this.moduleConfig = await loadModuleConfig(process.cwd(), 'paper');
+    }
+    return this.moduleConfig;
+  }
 
   async start(ctx: SubsystemContext): Promise<void> {
     this.running = true;
-    this.learner = new Learner(new LLM(ctx.config.llm), process.cwd());
+    const config = await this.getModuleConfig();
+    this.tickInterval = config.tickInterval ?? 5000;
+    const llm = createLLM('paper', ctx.config.llm, ctx.config.agents);
+    this.learner = new Learner(llm, process.cwd(), config);
     this.log.info('Paper dispatcher started');
 
     while (this.running) {
@@ -23,8 +36,9 @@ export class PaperDispatcher {
         await this.tick(ctx, this.learner);
       } catch (e) {
         if (e instanceof RateLimitError) {
+          const cap = config.rateLimitRecoveryCap ?? 60000;
           this.log.warn(`Rate limited. Waiting ${Math.ceil(e.waitMs / 60000)} min...`);
-          await Bun.sleep(Math.min(e.waitMs, 60000));
+          await Bun.sleep(Math.min(e.waitMs, cap));
         } else {
           this.log.error(`Tick error: ${e instanceof Error ? e.message : e}`);
         }
@@ -37,7 +51,9 @@ export class PaperDispatcher {
 
   async runOnce(ctx: SubsystemContext): Promise<void> {
     this.log.info('Running paper pipeline (one pass)');
-    const learner = new Learner(new LLM(ctx.config.llm), process.cwd());
+    const config = await this.getModuleConfig();
+    const llm = createLLM('learner', ctx.config.llm, ctx.config.agents);
+    const learner = new Learner(llm, process.cwd(), config);
     await this.tick(ctx, learner);
     await learner.maybeLearn();
     this.log.info('Paper pass complete');
@@ -51,7 +67,7 @@ export class PaperDispatcher {
     if (LLM.isCurrentlyRateLimited()) return;
 
     const db = getDb();
-    const llm = new LLM(ctx.config.llm);
+    const llm = createLLM('paper', ctx.config.llm, ctx.config.agents);
     const projectDir = process.cwd();
     const pipeline = new PaperPipeline(llm, projectDir);
 

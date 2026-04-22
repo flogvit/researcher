@@ -1,9 +1,9 @@
-import { getDb } from '../../db/connection.js';
-import { discoveries, researchLog, reviewFeedback } from '../../db/schema.js';
+import { getDb } from '../../db/connection';
+import { discoveries, researchLog, reviewFeedback } from '../../db/schema';
 import { eq } from 'drizzle-orm';
-import { LLM } from '../../llm/llm.js';
-import { Logger } from '../../core/logger.js';
-import { loadPrompt } from '../../core/prompt-loader.js';
+import { LLM } from '../../llm/llm';
+import { Logger } from '../../core/logger';
+import { loadPrompt } from '../../core/prompt-loader';
 
 interface DomainReviewResult {
   alignment: string;
@@ -47,8 +47,13 @@ interface LitSearchResult {
 
 export class PaperPipeline {
   private log = new Logger('paper');
+  private agentsUsed: string[] = [];
 
   constructor(private llm: LLM, private projectDir: string) {}
+
+  getAgentsUsed(): string[] {
+    return [...this.agentsUsed];
+  }
 
   async domainReview(discovery: typeof discoveries.$inferSelect): Promise<void> {
     this.log.info(`Domain review for: "${discovery.title}"...`);
@@ -66,6 +71,7 @@ export class PaperPipeline {
     });
 
     try {
+      this.agentsUsed.push('domain-reviewer');
       const response = await this.llm.callJSON<DomainReviewResult>(prompt);
 
       await db.update(discoveries)
@@ -108,6 +114,7 @@ export class PaperPipeline {
     });
 
     try {
+      this.agentsUsed.push('paper-writer');
       const response = await this.llm.call(prompt);
 
       await db.update(discoveries)
@@ -278,7 +285,7 @@ Rewrite the ENTIRE paper. Be honest — it is better to say "this requires furth
       strengths: review.strengths,
       weaknesses: review.weaknesses,
       requiredRevisions: review.requiredRevisions,
-      agentsUsed: null, // TODO: track which agents contributed to this paper
+      agentsUsed: this.agentsUsed.length > 0 ? this.agentsUsed : null,
     });
 
     await db.insert(researchLog).values({

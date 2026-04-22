@@ -1,5 +1,5 @@
-import { LLM } from '../../llm/llm.js';
-import { loadPrompt } from '../../core/prompt-loader.js';
+import { LLM } from '../../llm/llm';
+import { loadPrompt } from '../../core/prompt-loader';
 
 export interface TriageResult {
   verdict: 'proceed' | 'split' | 'skip';

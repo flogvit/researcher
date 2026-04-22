@@ -1,6 +1,6 @@
-import { LLM } from '../../llm/llm.js';
-import { loadPrompt } from '../../core/prompt-loader.js';
-import { readStrategyFile } from '../../core/state.js';
+import { LLM } from '../../llm/llm';
+import { loadPrompt } from '../../core/prompt-loader';
+import { readStrategyFile } from '../../core/state';
 
 interface GenerateResult {
   reasoning: string;

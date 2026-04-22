@@ -1,14 +1,16 @@
-import { getDb } from '../../../db/connection.js';
-import { documents } from '../../../db/schema.js';
+import { getDb } from '../../../db/connection';
+import { documents } from '../../../db/schema';
 import { eq, and, isNotNull, isNull } from 'drizzle-orm';
+import type { ModuleConfig } from '../../../core/module-config';
+import { randomDelay } from '../../../core/module-config';
 
-const DELAY_MS = 3000;
+const DEFAULT_DOWNLOAD_DELAY = { minMs: 2000, maxMs: 5000 };
 
 /**
  * Process the next document waiting to be downloaded.
  * Returns true if a document was processed, false if nothing to do.
  */
-export async function processNext(): Promise<boolean> {
+export async function processNext(config?: ModuleConfig): Promise<boolean> {
   const db = getDb();
 
   // Pick one document with status='metadata' that has a URL
@@ -77,7 +79,7 @@ export async function processNext(): Promise<boolean> {
       .where(eq(documents.id, item.id));
   }
 
-  await Bun.sleep(DELAY_MS);
+  await randomDelay(config?.downloadDelay ?? DEFAULT_DOWNLOAD_DELAY);
   return true;
 }
 

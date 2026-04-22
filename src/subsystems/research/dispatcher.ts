@@ -1,20 +1,20 @@
-import type { SubsystemContext } from '../../core/subsystem.js';
-import type { ModuleConfig } from '../../core/module-config.js';
-import { getDb } from '../../db/connection.js';
-import { agentTasks, findings, researchLog, projects, documents, embeddings } from '../../db/schema.js';
+import type { SubsystemContext } from '../../core/subsystem';
+import type { ModuleConfig } from '../../core/module-config';
+import { getDb } from '../../db/connection';
+import { agentTasks, findings, researchLog, projects, documents, embeddings } from '../../db/schema';
 import { eq, desc, sql, asc, and } from 'drizzle-orm';
-import { LLM, RateLimitError } from '../../llm/llm.js';
-import { Logger } from '../../core/logger.js';
-import { loadPrompt, loadModuleConfig } from '../../core/prompt-loader.js';
-import { Triage } from './triage.js';
-import { Reviewer } from './reviewer.js';
-import { Reflector } from './reflector.js';
-import { TaskGenerator } from './task-generator.js';
-import { Supervisor } from './supervisor.js';
-import { PromptAgent } from './agents/prompt-agent.js';
-import type { BaseAgent } from './agents/base-agent.js';
+import { LLM, RateLimitError, createLLM } from '../../llm/llm';
+import { Logger } from '../../core/logger';
+import { loadPrompt, loadModuleConfig } from '../../core/prompt-loader';
+import { Triage } from './triage';
+import { Reviewer } from './reviewer';
+import { Reflector } from './reflector';
+import { TaskGenerator } from './task-generator';
+import { Supervisor } from './supervisor';
+import { PromptAgent } from './agents/prompt-agent';
+import type { BaseAgent } from './agents/base-agent';
 import { resolve } from 'node:path';
-import { searchSimilar } from '../../llm/embeddings.js';
+import { searchSimilar } from '../../llm/embeddings';
 
 export class ResearchDispatcher {
   private running = false;
@@ -28,6 +28,10 @@ export class ResearchDispatcher {
 
   constructor() {
     this.projectDir = process.cwd();
+  }
+
+  private llmFor(agentName: string, ctx: SubsystemContext): LLM {
+    return createLLM(agentName, ctx.config.llm, ctx.config.agents);
   }
 
   private async getModuleConfig(): Promise<ModuleConfig> {
@@ -53,7 +57,8 @@ export class ResearchDispatcher {
       } catch (e) {
         if (e instanceof RateLimitError) {
           this.log.warn(`Rate limited. Waiting ${Math.ceil(e.waitMs / 60000)} min...`);
-          await Bun.sleep(Math.min(e.waitMs, 60000));
+          const cap = config.rateLimitRecoveryCap ?? 60000;
+          await Bun.sleep(Math.min(e.waitMs, cap));
         } else {
           this.log.error(`Tick error: ${e instanceof Error ? e.message : e}`);
         }
@@ -126,7 +131,6 @@ export class ResearchDispatcher {
 
   private async processOneTask(ctx: SubsystemContext, config: ModuleConfig): Promise<boolean> {
     const db = getDb();
-    const llm = new LLM(ctx.config.llm);
 
     // Pick oldest pending task
     const [task] = await db
@@ -150,7 +154,7 @@ export class ResearchDispatcher {
     const isSplitChild = (task.payload as Record<string, unknown>)?.fromSplit === true;
     if (!isSplitChild && this.isStepEnabled(config, 'triage')) {
       try {
-        const triage = new Triage(llm, this.projectDir);
+        const triage = new Triage(this.llmFor('triage', ctx), this.projectDir);
         const triageResult = await triage.evaluate(task.agentType, String(taskDescription));
 
         if (triageResult.verdict === 'split' && triageResult.subtasks?.length) {
@@ -187,14 +191,14 @@ export class ResearchDispatcher {
     // Execute
     if (this.isStepEnabled(config, 'execute')) {
       try {
-        const agent = this.getAgent(task.agentType, llm);
+        const agent = this.getAgent(task.agentType, this.llmFor('researcher', ctx));
         const result = await agent.execute(task.payload as Record<string, unknown>);
 
         // Review
         let reviewQuality = 'unreviewed';
         if (this.isStepEnabled(config, 'review')) {
           try {
-            const reviewer = new Reviewer(llm, this.projectDir);
+            const reviewer = new Reviewer(this.llmFor('reviewer', ctx), this.projectDir);
             const review = await reviewer.review(String(taskDescription), result);
             reviewQuality = review.quality;
             if (!review.approved) {
@@ -258,11 +262,15 @@ export class ResearchDispatcher {
 
   private async runReflection(ctx: SubsystemContext): Promise<void> {
     const db = getDb();
-    const llm = new LLM(ctx.config.llm);
+    const llm = this.llmFor('reflector', ctx);
     const agentTypes = ctx.config.research?.agentTypes ?? [];
     const strategyPath = resolve(this.projectDir, ctx.config.research?.strategyFile ?? 'research/strategy.md');
 
     this.tasksSinceReflection = 0;
+
+    const config = await this.getModuleConfig();
+    const reflectStep = config.steps.find(s => s.name === 'reflect');
+    const maxTasks = reflectStep?.maxTasks ?? 3;
 
     const reflector = new Reflector(llm, strategyPath, this.projectDir);
     const recentFindings = await db.select().from(findings).orderBy(desc(findings.createdAt)).limit(10);
@@ -272,7 +280,7 @@ export class ResearchDispatcher {
       agentTypes,
     );
 
-    for (const next of reflection.nextTasks.slice(0, 3)) {
+    for (const next of reflection.nextTasks.slice(0, maxTasks)) {
       await db.insert(agentTasks).values({
         agentType: next.agentType,
         status: 'pending',
@@ -293,12 +301,13 @@ export class ResearchDispatcher {
   private async runGenerateWork(ctx: SubsystemContext): Promise<void> {
     const db = getDb();
     const now = Date.now();
+    const config = await this.getModuleConfig();
+    const cooldown = config.generateWorkCooldown ?? 300_000;
 
-    // 5-minute cooldown
-    if (now - this.lastGenerateTime < 300_000) return;
+    if (now - this.lastGenerateTime < cooldown) return;
     this.lastGenerateTime = now;
 
-    const llm = new LLM(ctx.config.llm);
+    const llm = this.llmFor('task-generator', ctx);
     const agentTypes = ctx.config.research?.agentTypes ?? [];
     const strategyPath = resolve(this.projectDir, ctx.config.research?.strategyFile ?? 'research/strategy.md');
 
@@ -315,7 +324,8 @@ export class ResearchDispatcher {
       agentTypes,
     );
 
-    for (const task of result.tasks.slice(0, 5)) {
+    const maxTasks = config.maxTasksPerCycle ?? 5;
+    for (const task of result.tasks.slice(0, maxTasks)) {
       await db.insert(agentTasks).values({
         agentType: task.agentType,
         status: 'pending',
@@ -334,7 +344,7 @@ export class ResearchDispatcher {
   }
 
   private async runSupervisor(ctx: SubsystemContext): Promise<void> {
-    const llm = new LLM(ctx.config.llm);
+    const llm = this.llmFor('supervisor', ctx);
     const supervisor = new Supervisor(llm, this.projectDir);
     await supervisor.check();
   }
@@ -407,9 +417,12 @@ export class ResearchDispatcher {
     const db = getDb();
 
     // Semantic search using embeddings
+    const config = await this.getModuleConfig();
+    const semanticLimit = config.semanticSearchLimit ?? 20;
+    const keywordLimit = config.keywordSearchLimit ?? 20;
     let semanticResults: Array<{ sourceId: number | null }> = [];
     try {
-      semanticResults = await searchSimilar(project.title, 20);
+      semanticResults = await searchSimilar(project.title, semanticLimit);
     } catch (e) {
       this.log.warn(`Semantic search failed: ${e instanceof Error ? e.message : e}`);
     }
@@ -424,7 +437,7 @@ export class ResearchDispatcher {
         .select({ id: documents.id })
         .from(documents)
         .where(sql`(${documents.title} ILIKE ${pattern} OR ${documents.content} ILIKE ${pattern})`)
-        .limit(20);
+        .limit(keywordLimit);
       keywordDocs.push(...results);
     }
 
@@ -465,7 +478,7 @@ export class ResearchDispatcher {
   ): Promise<void> {
     this.log.info(`Project "${project.title}": reviewing literature...`);
     const db = getDb();
-    const llm = new LLM(ctx.config.llm);
+    const llm = this.llmFor('researcher', ctx);
 
     // Get relevant documents via keyword search
     const keywords = project.title.split(/\s+/).filter(w => w.length > 3);
@@ -547,7 +560,7 @@ export class ResearchDispatcher {
   ): Promise<void> {
     this.log.info(`Project "${project.title}": identifying research gaps...`);
     const db = getDb();
-    const llm = new LLM(ctx.config.llm);
+    const llm = this.llmFor('researcher', ctx);
 
     const gapsPrompt = await loadPrompt(this.projectDir, 'identify-gaps');
     const prompt = LLM.formatPrompt(gapsPrompt, {
@@ -598,7 +611,7 @@ export class ResearchDispatcher {
     ctx: SubsystemContext,
   ): Promise<void> {
     const db = getDb();
-    const llm = new LLM(ctx.config.llm);
+    const llm = this.llmFor('researcher', ctx);
     const config = await this.getModuleConfig();
 
     // Check if we have enough findings to write a paper
@@ -666,7 +679,7 @@ export class ResearchDispatcher {
 
     this.log.info(`Project "${project.title}": writing paper...`);
     const db = getDb();
-    const llm = new LLM(ctx.config.llm);
+    const llm = this.llmFor('researcher', ctx);
 
     const projectFindings = await db
       .select()

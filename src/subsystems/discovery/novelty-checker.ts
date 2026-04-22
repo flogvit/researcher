@@ -1,9 +1,10 @@
-import { getDb } from '../../db/connection.js';
-import { findings, discoveries, researchLog } from '../../db/schema.js';
+import { getDb } from '../../db/connection';
+import { findings, discoveries, researchLog } from '../../db/schema';
 import { eq, desc, sql, and } from 'drizzle-orm';
-import { LLM } from '../../llm/llm.js';
-import { loadPrompt } from '../../core/prompt-loader.js';
-import { Logger } from '../../core/logger.js';
+import { LLM } from '../../llm/llm';
+import { loadPrompt } from '../../core/prompt-loader';
+import { Logger } from '../../core/logger';
+import type { ModuleConfig } from '../../core/module-config';
 
 interface NoveltyResult {
   isNovel: boolean;
@@ -23,10 +24,12 @@ export class NoveltyChecker {
   private llm: LLM;
   private projectDir: string;
   private log = new Logger('novelty');
+  private config?: ModuleConfig;
 
-  constructor(llm: LLM, projectDir: string) {
+  constructor(llm: LLM, projectDir: string, config?: ModuleConfig) {
     this.llm = llm;
     this.projectDir = projectDir;
+    this.config = config;
   }
 
   /**
@@ -46,7 +49,7 @@ export class NoveltyChecker {
         ),
       )
       .orderBy(desc(findings.createdAt))
-      .limit(5);
+      .limit(this.config?.steps?.find(s => s.name === 'novelty')?.batchSize ?? 5);
 
     for (const finding of strongFindings) {
       await this.evaluateFinding(finding);
@@ -126,7 +129,7 @@ export class NoveltyChecker {
       .select()
       .from(discoveries)
       .where(eq(discoveries.status, 'pending_verification'))
-      .limit(3);
+      .limit(this.config?.steps?.find(s => s.name === 'lit-search')?.batchSize ?? 3);
 
     for (const discovery of pendingDiscoveries) {
       await this.searchLiterature(discovery);

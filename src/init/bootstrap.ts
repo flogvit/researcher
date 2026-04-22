@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { LLM } from '../llm/llm.js';
+import { LLM, createLLM } from '../llm/llm';
+import type { AgentConfig } from '../config';
 import { Glob } from 'bun';
 
 export interface BootstrapResult {
@@ -13,6 +14,7 @@ export interface BootstrapResult {
   strategy: string;
   moduleConfigs: Record<string, object>;
   prompts: Array<{ name: string; content: string }>;
+  recommendedSources?: string[];
 }
 
 // Step 1: Get the project skeleton — name, description, language, search terms, agent names, method names
@@ -23,6 +25,7 @@ interface SkeletonResult {
   searchTerms: string[];
   agentNames: string[];
   methodNames: string[];
+  recommendedSources?: string[];
 }
 
 // Step 2: Generate one prompt/agent/method at a time
@@ -54,12 +57,14 @@ async function loadDefaultModuleConfigs(): Promise<Record<string, object>> {
   return configs;
 }
 
-export async function bootstrapProject(domain: string, language?: string): Promise<BootstrapResult> {
-  const llm = new LLM({
-    provider: 'claude',
-    model: 'opus',
-    allowedTools: ['WebSearch', 'WebFetch'],
-  });
+const defaultBootstrapConfig = {
+  provider: 'claude' as const,
+  model: 'opus',
+  allowedTools: ['WebSearch', 'WebFetch'],
+};
+
+export async function bootstrapProject(domain: string, language?: string, agents?: Record<string, AgentConfig>): Promise<BootstrapResult> {
+  const llm = createLLM('bootstrap', defaultBootstrapConfig, agents);
 
   console.log('Loading default prompts and module configs...');
   const [defaultPrompts, defaultModuleConfigs] = await Promise.all([
@@ -86,6 +91,7 @@ ${langInstruction}
 4. **searchTerms**: 30-60 DOAJ search terms. Be specific and varied — sub-fields, key concepts, methodologies, debates. English for best DOAJ coverage.
 5. **agentNames**: 2-5 kebab-case agent names suited for this domain (e.g. "exegete", "historian", "theologian"). Names can be in the project language.
 6. **methodNames**: 3-8 kebab-case methodology names relevant to this domain (e.g. "textual-criticism", "comparative-analysis")
+7. **recommendedSources**: Which academic source plugins to enable. Choose from: doaj, openalex, semantic-scholar, crossref, pubmed, arxiv. Pick those most relevant for the domain.
 
 Reply with JSON:
 \`\`\`json
@@ -95,7 +101,8 @@ Reply with JSON:
   "language": "en",
   "searchTerms": ["term1", "term2"],
   "agentNames": ["agent1", "agent2"],
-  "methodNames": ["method1", "method2"]
+  "methodNames": ["method1", "method2"],
+  "recommendedSources": ["doaj", "openalex"]
 }
 \`\`\``);
 
@@ -115,6 +122,7 @@ Reply with JSON:
     strategy: '',
     moduleConfigs: {},
     prompts: [],
+    recommendedSources: sk.recommendedSources,
   };
 
   // Step 2: Generate each agent prompt (plain text, not JSON — prompts are too long for JSON wrapping)

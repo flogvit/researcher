@@ -46,11 +46,28 @@ function parseRateLimitDelay(text: string): number | null {
 }
 
 export interface LLMConfig {
-  provider: 'claude' | 'ollama';
+  provider: 'claude' | 'ollama' | 'codex' | 'opencode';
   model?: string;
   baseUrl?: string;
   allowedTools?: string[];
   maxTurns?: number;
+}
+
+export type LLMProvider = 'claude' | 'ollama' | 'codex' | 'opencode';
+
+export function createLLM(
+  agentName: string,
+  globalConfig: LLMConfig,
+  agents?: Record<string, Partial<LLMConfig>>,
+): LLM {
+  const agentOverride = agents?.[agentName] ?? {};
+  return new LLM({
+    provider: agentOverride.provider ?? globalConfig.provider,
+    model: agentOverride.model ?? globalConfig.model,
+    baseUrl: agentOverride.baseUrl ?? globalConfig.baseUrl,
+    allowedTools: agentOverride.allowedTools ?? globalConfig.allowedTools,
+    maxTurns: agentOverride.maxTurns ?? globalConfig.maxTurns,
+  });
 }
 
 export interface LLMResponse {
@@ -86,9 +103,14 @@ export class LLM {
     return Math.max(0, LLM.rateLimitedUntil - Date.now());
   }
 
+  private ollamaReady = false;
+
   constructor(config: LLMConfig) {
     this.provider = config.provider;
-    this.model = config.model ?? (config.provider === 'claude' ? 'sonnet' : 'qwen3.5:32b');
+    const defaultModels: Record<string, string> = {
+      claude: 'sonnet', codex: 'codex', opencode: 'opencode', ollama: 'qwen3.5:32b',
+    };
+    this.model = config.model ?? defaultModels[config.provider] ?? 'sonnet';
     this.baseUrl = config.baseUrl ?? 'http://localhost:11434';
     this.allowedTools = config.allowedTools ?? [];
     this.maxTurns = config.maxTurns ?? 25;
@@ -101,10 +123,12 @@ export class LLM {
       throw new RateLimitError(`Rate limited. Waiting ${Math.ceil(waitMs / 60_000)} minutes.`, waitMs);
     }
 
-    if (this.provider === 'claude') {
-      return this.callClaude(prompt, systemPrompt);
+    switch (this.provider) {
+      case 'claude': return this.callClaude(prompt, systemPrompt);
+      case 'codex': return this.callCodex(prompt, systemPrompt);
+      case 'opencode': return this.callOpenCode(prompt, systemPrompt);
+      default: return this.callOllama(prompt, systemPrompt);
     }
-    return this.callOllama(prompt, systemPrompt);
   }
 
   async callJSON<T>(prompt: string, systemPrompt?: string): Promise<{ data: T } & LLMResponse> {
@@ -184,7 +208,75 @@ export class LLM {
     };
   }
 
+  private async callCodex(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
+    const args: string[] = ['exec', '-m', this.model];
+    if (systemPrompt) {
+      args.push('--system-prompt', systemPrompt);
+    }
+
+    const proc = Bun.spawn(['codex', ...args], {
+      stdin: new Response(prompt),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    const output = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    const combined = `${output}\n${stderr}`;
+
+    if (exitCode !== 0 && isRateLimited(combined)) {
+      const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000;
+      LLM.rateLimitedUntil = Date.now() + delayMs;
+      throw new RateLimitError(`Rate limited. Waiting ${Math.ceil(delayMs / 60_000)} minutes.`, delayMs);
+    }
+
+    if (exitCode !== 0) {
+      throw new Error(`codex exited with code ${exitCode}: ${(stderr.trim() || output.trim()).slice(0, 500)}`);
+    }
+
+    return { text: output.trim(), tokensUsed: 0, model: this.model };
+  }
+
+  private async callOpenCode(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
+    const args: string[] = ['run', '-m', this.model];
+
+    const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
+    args.push(fullPrompt);
+
+    const proc = Bun.spawn(['opencode', ...args], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    const output = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    const combined = `${output}\n${stderr}`;
+
+    if (exitCode !== 0 && isRateLimited(combined)) {
+      const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000;
+      LLM.rateLimitedUntil = Date.now() + delayMs;
+      throw new RateLimitError(`Rate limited. Waiting ${Math.ceil(delayMs / 60_000)} minutes.`, delayMs);
+    }
+
+    if (exitCode !== 0) {
+      throw new Error(`opencode exited with code ${exitCode}: ${(stderr.trim() || output.trim()).slice(0, 500)}`);
+    }
+
+    return { text: output.trim(), tokensUsed: 0, model: this.model };
+  }
+
   private async callOllama(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
+    if (!this.ollamaReady) {
+      const { ensureOllamaRunning, ensureModel } = await import('./ollama-manager');
+      await ensureOllamaRunning(this.baseUrl);
+      await ensureModel(this.model, this.baseUrl);
+      this.ollamaReady = true;
+    }
+
     const messages: Array<{ role: string; content: string }> = [];
     if (systemPrompt) {
       messages.push({ role: 'system', content: systemPrompt });

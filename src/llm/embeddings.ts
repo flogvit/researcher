@@ -1,16 +1,27 @@
-import { getDb } from '../db/connection.js';
-import { embeddings, findings } from '../db/schema.js';
+import { getDb } from '../db/connection';
+import { embeddings, findings } from '../db/schema';
 import { sql } from 'drizzle-orm';
+import type { ProjectConfig } from '../config';
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
-const EMBED_MODEL = 'nomic-embed-text';
+let embeddingBaseUrl = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+let embeddingModel = 'nomic-embed-text';
+let embeddingBatchSize = 10;
+
+export function initEmbeddingConfig(config: ProjectConfig): void {
+  embeddingBaseUrl = config.embedding?.baseUrl ?? config.llm.baseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+  embeddingModel = config.embedding?.model ?? 'nomic-embed-text';
+}
+
+export function setEmbeddingBatchSize(size: number): void {
+  embeddingBatchSize = size;
+}
 
 export async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await fetch(`${OLLAMA_BASE_URL}/api/embed`, {
+  const response = await fetch(`${embeddingBaseUrl}/api/embed`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: EMBED_MODEL,
+      model: embeddingModel,
       input: text,
     }),
   });
@@ -33,7 +44,7 @@ export async function embedFindings(): Promise<number> {
     .where(
       sql`${findings.id} NOT IN (SELECT source_id FROM embeddings WHERE source_type = 'finding' AND source_id IS NOT NULL)`
     )
-    .limit(10);
+    .limit(embeddingBatchSize);
 
   let count = 0;
   for (const f of unembedded) {

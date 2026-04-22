@@ -1,7 +1,7 @@
-import type { Subsystem, SubsystemContext, SubsystemStatus } from '../../core/subsystem.js';
-import { LibraryDispatcher } from './dispatcher.js';
-import { getDb } from '../../db/connection.js';
-import { documents } from '../../db/schema.js';
+import type { Subsystem, SubsystemContext, SubsystemStatus } from '../../core/subsystem';
+import { LibraryDispatcher } from './dispatcher';
+import { getDb } from '../../db/connection';
+import { documents } from '../../db/schema';
 import { sql } from 'drizzle-orm';
 
 export class LibrarySubsystem implements Subsystem {

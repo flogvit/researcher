@@ -1,7 +1,9 @@
-import { getDb } from '../../../db/connection.js';
-import { documents, researchLog } from '../../../db/schema.js';
+import { getDb } from '../../../db/connection';
+import { documents, researchLog } from '../../../db/schema';
 import { sql } from 'drizzle-orm';
-import type { SourcePlugin } from './types.js';
+import type { SourcePlugin } from './types';
+import type { ModuleConfig } from '../../../core/module-config';
+import { randomDelay } from '../../../core/module-config';
 
 /**
  * DOAJ source plugin.
@@ -11,7 +13,7 @@ import type { SourcePlugin } from './types.js';
 
 const API_BASE = 'https://doaj.org/api/search/articles';
 const PAGE_SIZE = 10;
-const DELAY_MS = 500; // Be nice to the API
+const DEFAULT_DELAY = { minMs: 400, maxMs: 600 }; // Be nice to the API
 
 interface DOAJArticle {
   bibjson: {
@@ -37,7 +39,7 @@ async function isDuplicate(title: string, url: string | null): Promise<boolean> 
   return !!dup;
 }
 
-async function downloadTerm(term: string): Promise<{ added: number; total: number }> {
+async function downloadTerm(term: string, moduleConfig?: ModuleConfig): Promise<{ added: number; total: number }> {
   const db = getDb();
   let page = 1;
   let added = 0;
@@ -83,7 +85,7 @@ async function downloadTerm(term: string): Promise<{ added: number; total: numbe
 
     if (page * PAGE_SIZE >= data.total) break;
     page++;
-    await Bun.sleep(DELAY_MS);
+    await randomDelay(moduleConfig?.fetchDelay ?? DEFAULT_DELAY);
   }
 
   if (added > 0) {
@@ -96,7 +98,7 @@ async function downloadTerm(term: string): Promise<{ added: number; total: numbe
 export const doajSource: SourcePlugin = {
   name: 'doaj',
 
-  async fetch(settings: Record<string, unknown>): Promise<{ added: number; total: number }> {
+  async fetch(settings: Record<string, unknown>, moduleConfig?: ModuleConfig): Promise<{ added: number; total: number }> {
     const db = getDb();
     const searchTerms = settings.searchTerms as string[];
 
@@ -110,7 +112,7 @@ export const doajSource: SourcePlugin = {
     let grandTotal = 0;
 
     for (const term of searchTerms) {
-      const result = await downloadTerm(term);
+      const result = await downloadTerm(term, moduleConfig);
       totalAdded += result.added;
       grandTotal += result.total;
     }

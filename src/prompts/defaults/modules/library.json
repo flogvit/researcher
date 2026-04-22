@@ -1,0 +1,17 @@
+{
+  "tickInterval": 2000,
+  "fetchDelay": {
+    "minMs": 2000,
+    "maxMs": 10000
+  },
+  "downloadDelay": {
+    "minMs": 2000,
+    "maxMs": 10000
+  },
+  "rateLimitRecoveryCap": 60000,
+  "classifyContentLimit": 3000,
+  "extractorHtmlLimit": 15000,
+  "extractorMinContent": 2000,
+  "embeddingBatchSize": 10,
+  "steps": []
+}

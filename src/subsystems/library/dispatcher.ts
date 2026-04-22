@@ -1,37 +1,62 @@
-import type { SubsystemContext } from '../../core/subsystem.js';
-import type { SourcePlugin } from './sources/types.js';
-import { doajSource } from './sources/doaj.js';
-import * as downloader from './stages/downloader.js';
-import * as extractor from './stages/text-extractor.js';
-import * as classifier from './stages/classifier.js';
-import * as embedder from './stages/embedder.js';
-import { LLM } from '../../llm/llm.js';
-import { Logger } from '../../core/logger.js';
+import type { SubsystemContext } from '../../core/subsystem';
+import type { SourcePlugin } from './sources/types';
+import type { ModuleConfig } from '../../core/module-config';
+import { loadModuleConfig } from '../../core/prompt-loader';
+import { doajSource } from './sources/doaj';
+import { openalexSource } from './sources/openalex';
+import { semanticScholarSource } from './sources/semantic-scholar';
+import { crossrefSource } from './sources/crossref';
+import { pubmedSource } from './sources/pubmed';
+import { arxivSource } from './sources/arxiv';
+import { indexLocalSource } from './sources/local';
+import * as downloader from './stages/downloader';
+import * as extractor from './stages/text-extractor';
+import * as classifier from './stages/classifier';
+import * as embedder from './stages/embedder';
+import { LLM } from '../../llm/llm';
+import { Logger } from '../../core/logger';
 
 // Source plugin registry
 const SOURCE_PLUGINS: Record<string, SourcePlugin> = {
   doaj: doajSource,
+  openalex: openalexSource,
+  'semantic-scholar': semanticScholarSource,
+  crossref: crossrefSource,
+  pubmed: pubmedSource,
+  arxiv: arxivSource,
 };
 
 export class LibraryDispatcher {
   private running = false;
   private tickInterval = 2000;
   private lastSourceRun: Record<string, number> = {};
+  private lastLocalSourceRun = 0;
   private log = new Logger('library');
+  private moduleConfig: ModuleConfig | null = null;
+
+  private async getModuleConfig(): Promise<ModuleConfig> {
+    if (!this.moduleConfig) {
+      this.moduleConfig = await loadModuleConfig(process.cwd(), 'library');
+    }
+    return this.moduleConfig;
+  }
 
   async start(ctx: SubsystemContext): Promise<void> {
     this.running = true;
+    const config = await this.getModuleConfig();
+    this.tickInterval = config.tickInterval ?? 2000;
     this.log.info('Library pipeline started');
 
     // Run sources on startup
-    await this.runSources(ctx);
+    await this.runSources(ctx, config);
+    await this.maybeRunLocalSources(ctx);
 
     // Mark documents without URLs as failed (can't download them)
     const noUrl = await downloader.markNoUrl();
     if (noUrl > 0) this.log.info(`Marked ${noUrl} documents without URL as failed`);
 
     while (this.running) {
-      await this.tick(ctx);
+      await this.tick(ctx, config);
       await Bun.sleep(this.tickInterval);
     }
 
@@ -40,9 +65,11 @@ export class LibraryDispatcher {
 
   async runOnce(ctx: SubsystemContext): Promise<void> {
     this.log.info('Running library pipeline (one pass)');
+    const config = await this.getModuleConfig();
 
     // 1. Run all sources
-    await this.runSources(ctx);
+    await this.runSources(ctx, config);
+    await this.runLocalSources(ctx);
 
     // 2. Mark documents without URLs
     const noUrl = await downloader.markNoUrl();
@@ -54,37 +81,38 @@ export class LibraryDispatcher {
       processed = false;
 
       // Download
-      if (await downloader.processNext()) { processed = true; continue; }
+      if (await downloader.processNext(config)) { processed = true; continue; }
 
       // Extract
-      if (await extractor.processNext()) { processed = true; continue; }
+      if (await extractor.processNext(config)) { processed = true; continue; }
 
       // Classify
       const llm = ctx.llm as LLM;
-      if (await classifier.processNext(llm, process.cwd())) { processed = true; continue; }
+      if (await classifier.processNext(llm, process.cwd(), config)) { processed = true; continue; }
 
       // Embed
-      if (await embedder.processNext()) { processed = true; continue; }
+      if (await embedder.processNext(config)) { processed = true; continue; }
     }
 
     this.log.info('Library pipeline pass complete');
   }
 
-  private async tick(ctx: SubsystemContext): Promise<void> {
+  private async tick(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {
     // Check if any source needs to run
-    await this.maybeRunSources(ctx);
+    await this.maybeRunSources(ctx, config);
+    await this.maybeRunLocalSources(ctx);
 
     // Process one item from each stage (priority: download first, embed last)
-    await downloader.processNext();
-    await extractor.processNext();
+    await downloader.processNext(config);
+    await extractor.processNext(config);
     const llm = ctx.llm as LLM;
     if (!LLM.isCurrentlyRateLimited()) {
-      await classifier.processNext(llm, process.cwd());
+      await classifier.processNext(llm, process.cwd(), config);
     }
-    await embedder.processNext();
+    await embedder.processNext(config);
   }
 
-  private async runSources(ctx: SubsystemContext): Promise<void> {
+  private async runSources(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {
     const sources = ctx.config.library.sources.filter(s => s.enabled);
 
     for (const sourceConfig of sources) {
@@ -96,7 +124,7 @@ export class LibraryDispatcher {
 
       try {
         this.log.info(`Running source: ${plugin.name}`);
-        const result = await plugin.fetch(sourceConfig.settings);
+        const result = await plugin.fetch(sourceConfig.settings, config);
         this.log.info(`Source ${plugin.name}: ${result.added} new, ${result.total} total`);
         this.lastSourceRun[sourceConfig.type] = Date.now();
       } catch (e) {
@@ -105,7 +133,7 @@ export class LibraryDispatcher {
     }
   }
 
-  private async maybeRunSources(ctx: SubsystemContext): Promise<void> {
+  private async maybeRunSources(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {
     const sources = ctx.config.library.sources.filter(s => s.enabled);
     const now = Date.now();
 
@@ -119,13 +147,37 @@ export class LibraryDispatcher {
 
         try {
           this.log.info(`Running source: ${plugin.name} (interval elapsed)`);
-          const result = await plugin.fetch(sourceConfig.settings);
+          const result = await plugin.fetch(sourceConfig.settings, config);
           this.log.info(`Source ${plugin.name}: ${result.added} new`);
           this.lastSourceRun[sourceConfig.type] = now;
         } catch (e) {
           this.log.error(`Source ${plugin.name} failed: ${e instanceof Error ? e.message : e}`);
         }
       }
+    }
+  }
+
+  private async runLocalSources(ctx: SubsystemContext): Promise<void> {
+    const localSources = ctx.config.library.localSources ?? [];
+    for (const source of localSources.filter(s => s.enabled)) {
+      try {
+        this.log.info(`Indexing local source: ${source.name ?? source.path}`);
+        const result = await indexLocalSource(source);
+        this.log.info(`Local source ${source.name ?? source.path}: ${result.added} new, ${result.updated} updated`);
+      } catch (e) {
+        this.log.error(`Local source failed: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+    this.lastLocalSourceRun = Date.now();
+  }
+
+  private async maybeRunLocalSources(ctx: SubsystemContext): Promise<void> {
+    const localSources = ctx.config.library.localSources ?? [];
+    if (localSources.length === 0) return;
+    const now = Date.now();
+    const minInterval = Math.min(...localSources.map(s => (s.interval ?? 3600) * 1000));
+    if (now - this.lastLocalSourceRun >= minInterval) {
+      await this.runLocalSources(ctx);
     }
   }
 

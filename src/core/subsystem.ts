@@ -1,4 +1,4 @@
-import type { ProjectConfig } from '../config.js';
+import type { ProjectConfig } from '../config';
 
 export type SubsystemState = 'stopped' | 'starting' | 'running' | 'idle' | 'error';
 

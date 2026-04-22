@@ -1,5 +1,5 @@
-import type { Subsystem, SubsystemContext, SubsystemStatus } from './subsystem.js';
-import { Logger } from './logger.js';
+import type { Subsystem, SubsystemContext, SubsystemStatus } from './subsystem';
+import { Logger } from './logger';
 
 export class Orchestrator {
   private subsystems: Map<string, Subsystem> = new Map();
@@ -19,11 +19,14 @@ export class Orchestrator {
     const running: Promise<void>[] = [];
 
     for (const subsystem of ordered) {
+      const timeout = ctx.config.orchestrator?.dependencyTimeout ?? 60000;
+      const pollInterval = ctx.config.orchestrator?.dependencyPollInterval ?? 500;
+
       // Wait for dependencies to be ready before starting
       for (const dep of subsystem.dependencies) {
         if (!this.readySet.has(dep)) {
           this.log.info(`Waiting for ${dep} to be ready before starting ${subsystem.name}`);
-          await this.waitForReady(dep);
+          await this.waitForReady(dep, timeout, pollInterval);
         }
       }
 
@@ -114,13 +117,13 @@ export class Orchestrator {
     return sorted;
   }
 
-  private async waitForReady(name: string, timeoutMs = 60000): Promise<void> {
+  private async waitForReady(name: string, timeoutMs = 60000, pollIntervalMs = 500): Promise<void> {
     const start = Date.now();
     while (!this.readySet.has(name)) {
       if (Date.now() - start > timeoutMs) {
         throw new Error(`Timeout waiting for ${name} to be ready`);
       }
-      await Bun.sleep(500);
+      await Bun.sleep(pollIntervalMs);
     }
   }
 }

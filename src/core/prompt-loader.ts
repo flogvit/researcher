@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { ModuleConfig } from './module-config.js';
+import type { ModuleConfig } from './module-config';
 
 /**
  * Load a prompt by name. Checks project dir first, falls back to shipped defaults.

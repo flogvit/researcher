@@ -9,20 +9,44 @@ export interface SourceConfig {
   settings: Record<string, unknown>;
 }
 
+export interface LocalSourceConfig {
+  path: string;
+  enabled: boolean;
+  name?: string;
+  extensions?: string[];
+  recursive?: boolean;
+  interval?: number;
+}
+
+export type LLMProvider = 'claude' | 'ollama' | 'codex' | 'opencode';
+
+export interface AgentConfig {
+  provider?: LLMProvider;
+  model?: string;
+  baseUrl?: string;
+  allowedTools?: string[];
+  maxTurns?: number;
+}
+
 export interface ProjectConfig {
   name: string;
   description: string;
   language: string; // prompt language (e.g. 'en', 'no')
   database: string; // PostgreSQL database name
   llm: {
-    provider: 'claude' | 'ollama';
+    provider: LLMProvider;
     model?: string;
     baseUrl?: string;
     allowedTools?: string[];
+    maxTurns?: number;
   };
+  agents?: Record<string, AgentConfig>;
+  embedding?: { model?: string; baseUrl?: string; };
   library: {
     sources: SourceConfig[];
+    localSources?: LocalSourceConfig[];
   };
+  orchestrator?: { dependencyTimeout?: number; dependencyPollInterval?: number; };
   research?: {
     agentTypes: string[];
     strategyFile?: string;

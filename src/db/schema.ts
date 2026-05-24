@@ -45,6 +45,7 @@ export const findings = pgTable('findings', {
 }, (table) => [
   index('idx_findings_agent').on(table.agentType),
   index('idx_findings_strength').on(table.evidenceStrength),
+  index('findings_project_id_idx').on(table.projectId),
 ]);
 
 // Immutable event log — everything that happens, never deleted
@@ -86,6 +87,7 @@ export const discoveries = pgTable('discoveries', {
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 }, (table) => [
   index('idx_discoveries_status').on(table.status),
+  index('discoveries_finding_id_idx').on(table.findingId),
 ]);
 
 // Embeddings for RAG — semantic search across all knowledge
@@ -99,6 +101,10 @@ export const embeddings = pgTable('embeddings', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => [
   index('idx_embeddings_source').on(table.sourceType, table.sourceId),
+  // ANN index added in 0003_performance_indexes migration. Drizzle's vector
+  // index DSL is limited; declared here so drizzle-kit generate doesn't try
+  // to re-create it.
+  index('embeddings_vec_cosine_idx').using('ivfflat', table.embedding.op('vector_cosine_ops')),
 ]);
 
 // Documents — downloaded and catalogued research material
@@ -134,6 +140,9 @@ export const documents = pgTable('documents', {
   index('idx_documents_status').on(table.status),
   index('idx_documents_type').on(table.contentType),
   index('idx_documents_plugin').on(table.sourcePlugin),
+  index('documents_url_idx').on(table.url),
+  index('documents_title_idx').on(table.title),
+  index('documents_scouted_at_idx').on(table.scoutedAt.desc()),
 ]);
 
 // Research projects — focused research on a specific topic
@@ -167,4 +176,6 @@ export const reviewFeedback = pgTable('review_feedback', {
   agentsUsed: jsonb('agents_used'),
   processedByLearner: boolean('processed_by_learner').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
-});
+}, (table) => [
+  index('review_feedback_processed_idx').on(table.processedByLearner),
+]);

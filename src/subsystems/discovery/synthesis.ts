@@ -49,8 +49,10 @@ export class SynthesisAgent {
     ).join('\n\n');
 
     const template = await loadPrompt(this.projectDir, 'synthesize');
+    // Findings derive from attacker-influenced documents; sentinel-wrap to
+    // contain prompt injection in any single finding (#8).
     const prompt = LLM.formatPrompt(template, {
-      findings: findingSummaries,
+      findings: LLM.wrapUntrusted(findingSummaries, 'findings'),
     });
 
     try {

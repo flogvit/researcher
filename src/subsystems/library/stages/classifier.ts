@@ -40,10 +40,13 @@ export async function processNext(llm: LLM, projectDir: string = process.cwd(), 
 
   try {
     const template = await loadPrompt(projectDir, 'classify');
+    // Sentinel-wrap the document body so an injection inside it can't issue
+    // instructions to the classifier (#8). The closing tag carries the same
+    // random nonce as the opener; bruteforcing it is impractical.
     const prompt = LLM.formatPrompt(template, {
       title: item.title,
       contentType: item.contentType,
-      content: item.content.slice(0, config?.classifyContentLimit ?? 3000),
+      content: LLM.wrapUntrusted(item.content.slice(0, config?.classifyContentLimit ?? 3000), 'document'),
     });
 
     const response = await llm.callJSON<ClassificationResult>(prompt);

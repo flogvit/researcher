@@ -90,9 +90,20 @@ export const bootstrapProjectHandler: AdminHandler<typeof schema> = {
 
     // DB step: throw on failure so the task ends 'failed' (retryable) rather
     // than 'completed' with status='partial' (silently stuck) — #19.
+    // SQL identifier guard: the DB name flows from result.name (LLM-generated)
+    // into CREATE DATABASE; anything outside [A-Za-z0-9_] could break out of
+    // the quoted identifier and run arbitrary SQL (#9).
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(config.database)) {
+      throw new Error(`bootstrap: refusing unsafe database name: ${JSON.stringify(config.database)}`);
+    }
+
     try {
       const { SQL } = await import('bun');
-      const adminClient = new SQL('postgresql://postgres@localhost:5432/postgres');
+      // Honor DATABASE_URL when set, falling back to the local-dev default (#9).
+      const adminUrl = process.env.DATABASE_URL_ADMIN
+        ?? process.env.DATABASE_URL?.replace(/\/[^/?]+(\?|$)/, '/postgres$1')
+        ?? 'postgresql://postgres@localhost:5432/postgres';
+      const adminClient = new SQL(adminUrl);
       try {
         await adminClient.unsafe(`CREATE DATABASE "${config.database}"`);
       } catch (e: unknown) {
@@ -103,7 +114,9 @@ export const bootstrapProjectHandler: AdminHandler<typeof schema> = {
 
       const { drizzle } = await import('drizzle-orm/bun-sql');
       const { migrate } = await import('drizzle-orm/bun-sql/migrator');
-      const migrationClient = new SQL(`postgresql://postgres@localhost:5432/${config.database}`);
+      const projectUrl = process.env.DATABASE_URL?.replace(/\/[^/?]+(\?|$)/, `/${config.database}$1`)
+        ?? `postgresql://postgres@localhost:5432/${config.database}`;
+      const migrationClient = new SQL(projectUrl);
       await migrationClient.unsafe('CREATE EXTENSION IF NOT EXISTS vector');
       const db = drizzle({ client: migrationClient });
       const packageRoot = resolve(import.meta.dir, '..', '..', '..');

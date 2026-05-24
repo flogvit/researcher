@@ -412,4 +412,24 @@ export class LLM {
       return vars[key] ?? match;
     });
   }
+
+  /**
+   * Wrap an untrusted document body in sentinel-fenced XML tags the model is
+   * instructed (via the surrounding prompt) to treat as data, not instructions.
+   * Random nonce per call so prompt-injection attempts inside the content
+   * can't simply close the tag — the closer would have to guess the nonce.
+   *
+   * Use whenever interpolating attacker-influenced text (document content,
+   * findings, search results) into a prompt. See issue #8.
+   */
+  static wrapUntrusted(content: string, label = 'document'): string {
+    const nonce = randomNonce();
+    return `<${label} nonce="${nonce}">\n${content}\n</${label}-${nonce}>`;
+  }
+}
+
+function randomNonce(): string {
+  const a = new Uint8Array(8);
+  crypto.getRandomValues(a);
+  return Array.from(a, b => b.toString(16).padStart(2, '0')).join('');
 }

@@ -126,6 +126,12 @@ export interface LLMConfig {
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 
 /**
+ * Tools the Claude CLI is allowed to use when an agent's config omits
+ * allowedTools. Read-only by design — write/exec must be opt-in (#3).
+ */
+const DEFAULT_SAFE_TOOLS: readonly string[] = ['Read', 'Glob', 'Grep'];
+
+/**
  * Spawn a child process and capture stdout+stderr with a hard timeout.
  *
  * Two issues addressed:
@@ -231,7 +237,14 @@ export class LLM {
     };
     this.model = config.model ?? defaultModels[config.provider] ?? 'sonnet';
     this.baseUrl = config.baseUrl ?? 'http://localhost:11434';
-    this.allowedTools = config.allowedTools ?? [];
+    // Default to a read-only minimum when the caller leaves allowedTools
+    // unset. Without this, --dangerously-skip-permissions gave the LLM full
+    // tool access (Bash, Write, Edit) while reading attacker-controlled
+    // document content — the RCE escalator described in #3. Callers that
+    // need write/exec must opt in explicitly.
+    this.allowedTools = config.allowedTools && config.allowedTools.length > 0
+      ? config.allowedTools
+      : [...DEFAULT_SAFE_TOOLS];
     this.maxTurns = config.maxTurns ?? 25;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
@@ -280,9 +293,8 @@ export class LLM {
       args.push('--system-prompt', systemPrompt);
     }
 
-    if (this.allowedTools.length > 0) {
-      args.push('--allowedTools', this.allowedTools.join(','));
-    }
+    // Always-on: the LLM is never invoked without an explicit tool surface (#3).
+    args.push('--allowedTools', this.allowedTools.join(','));
 
     const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
       ['claude', ...args],

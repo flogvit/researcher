@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { extractJSON } from './llm';
+import { extractJSON, spawnWithTimeout } from './llm';
 
 describe('extractJSON', () => {
   test('parses a bare JSON object', () => {
@@ -75,5 +75,36 @@ Note also that {this} is unrelated.`;
     const r = extractJSON<{ x: number }>(text);
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.data.x).toBe(1);
+  });
+});
+
+describe('spawnWithTimeout (#16, #27)', () => {
+  test('captures stdout and exit code for a fast process', async () => {
+    const result = await spawnWithTimeout(['echo', 'hello'], { timeoutMs: 5000 });
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('hello');
+  });
+
+  test('kills a hung process and reports timedOut', async () => {
+    const start = Date.now();
+    const result = await spawnWithTimeout(['sleep', '10'], { timeoutMs: 200 });
+    const elapsed = Date.now() - start;
+    expect(result.timedOut).toBe(true);
+    expect(elapsed).toBeLessThan(2000); // killed quickly, not waited full 10s
+  });
+
+  test('drains stdout and stderr concurrently (regression for #27)', async () => {
+    // The shell writes 200KB to stderr before anything to stdout. The old
+    // sequential drain would deadlock here: Response.text() would hang on
+    // stdout while the child blocked writing to a full stderr pipe.
+    const result = await spawnWithTimeout(
+      ['sh', '-c', 'yes "noise" | head -c 200000 1>&2; echo done'],
+      { timeoutMs: 5000 },
+    );
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('done');
+    expect(result.stderr.length).toBeGreaterThan(100000);
   });
 });

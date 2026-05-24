@@ -119,6 +119,56 @@ export interface LLMConfig {
   baseUrl?: string;
   allowedTools?: string[];
   maxTurns?: number;
+  /** Per-call timeout in ms. Default 5 minutes. Hung CLI no longer wedges the dispatcher (#16). */
+  timeoutMs?: number;
+}
+
+const DEFAULT_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Spawn a child process and capture stdout+stderr with a hard timeout.
+ *
+ * Two issues addressed:
+ *  - #16: previously hung CLIs ran forever. Now the timer kills the proc
+ *    and resolves with a marker so the caller can decide what to do.
+ *  - #27: previously stdout was awaited before stderr, which deadlocks if
+ *    the child writes >64KB to stderr before flushing stdout. Now we
+ *    drain both streams concurrently via Promise.all.
+ */
+export interface SpawnResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  timedOut: boolean;
+}
+
+export async function spawnWithTimeout(
+  cmd: string[],
+  opts: { stdin?: Response; timeoutMs?: number },
+): Promise<SpawnResult> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const proc = Bun.spawn(cmd, {
+    stdin: opts.stdin,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    try { proc.kill(); } catch { /* already gone */ }
+  }, timeoutMs);
+
+  try {
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const exitCode = await proc.exited;
+    return { stdout, stderr, exitCode, timedOut };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export type LLMProvider = 'claude' | 'ollama' | 'codex' | 'opencode';
@@ -159,6 +209,7 @@ export class LLM {
   private baseUrl: string;
   private allowedTools: string[];
   private maxTurns: number;
+  private timeoutMs: number;
 
   // Shared rate limit state — when one call hits limit, all pause
   private static rateLimitedUntil = 0;
@@ -182,6 +233,7 @@ export class LLM {
     this.baseUrl = config.baseUrl ?? 'http://localhost:11434';
     this.allowedTools = config.allowedTools ?? [];
     this.maxTurns = config.maxTurns ?? 25;
+    this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
   async call(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
@@ -232,21 +284,19 @@ export class LLM {
       args.push('--allowedTools', this.allowedTools.join(','));
     }
 
-    const proc = Bun.spawn(['claude', ...args], {
-      stdin: new Response(prompt),
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
+      ['claude', ...args],
+      { stdin: new Response(prompt), timeoutMs: this.timeoutMs },
+    );
 
-    const output = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    const exitCode = await proc.exited;
+    if (timedOut) {
+      throw new Error(`claude timed out after ${this.timeoutMs}ms`);
+    }
 
-    const combined = `${output}\n${stderr}`;
+    const combined = `${stdout}\n${stderr}`;
 
-    // Check for rate limiting
     if (exitCode !== 0 && isRateLimited(combined)) {
-      const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000; // Default 5 min
+      const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000;
       LLM.rateLimitedUntil = Date.now() + delayMs;
       const delayMin = Math.ceil(delayMs / 60_000);
       console.error(`Rate limited! Pausing all Claude calls for ${delayMin} minutes.`);
@@ -255,15 +305,11 @@ export class LLM {
     }
 
     if (exitCode !== 0) {
-      const errMsg = stderr.trim() || output.trim();
+      const errMsg = stderr.trim() || stdout.trim();
       throw new Error(`claude exited with code ${exitCode}: ${errMsg.slice(0, 500)}`);
     }
 
-    return {
-      text: output.trim(),
-      tokensUsed: 0,
-      model: this.model,
-    };
+    return { text: stdout.trim(), tokensUsed: 0, model: this.model };
   }
 
   private async callCodex(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
@@ -272,17 +318,16 @@ export class LLM {
       args.push('--system-prompt', systemPrompt);
     }
 
-    const proc = Bun.spawn(['codex', ...args], {
-      stdin: new Response(prompt),
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
+      ['codex', ...args],
+      { stdin: new Response(prompt), timeoutMs: this.timeoutMs },
+    );
 
-    const output = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    const exitCode = await proc.exited;
+    if (timedOut) {
+      throw new Error(`codex timed out after ${this.timeoutMs}ms`);
+    }
 
-    const combined = `${output}\n${stderr}`;
+    const combined = `${stdout}\n${stderr}`;
 
     if (exitCode !== 0 && isRateLimited(combined)) {
       const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000;
@@ -291,10 +336,10 @@ export class LLM {
     }
 
     if (exitCode !== 0) {
-      throw new Error(`codex exited with code ${exitCode}: ${(stderr.trim() || output.trim()).slice(0, 500)}`);
+      throw new Error(`codex exited with code ${exitCode}: ${(stderr.trim() || stdout.trim()).slice(0, 500)}`);
     }
 
-    return { text: output.trim(), tokensUsed: 0, model: this.model };
+    return { text: stdout.trim(), tokensUsed: 0, model: this.model };
   }
 
   private async callOpenCode(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
@@ -303,16 +348,16 @@ export class LLM {
     const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
     args.push(fullPrompt);
 
-    const proc = Bun.spawn(['opencode', ...args], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
+      ['opencode', ...args],
+      { timeoutMs: this.timeoutMs },
+    );
 
-    const output = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    const exitCode = await proc.exited;
+    if (timedOut) {
+      throw new Error(`opencode timed out after ${this.timeoutMs}ms`);
+    }
 
-    const combined = `${output}\n${stderr}`;
+    const combined = `${stdout}\n${stderr}`;
 
     if (exitCode !== 0 && isRateLimited(combined)) {
       const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000;
@@ -321,10 +366,10 @@ export class LLM {
     }
 
     if (exitCode !== 0) {
-      throw new Error(`opencode exited with code ${exitCode}: ${(stderr.trim() || output.trim()).slice(0, 500)}`);
+      throw new Error(`opencode exited with code ${exitCode}: ${(stderr.trim() || stdout.trim()).slice(0, 500)}`);
     }
 
-    return { text: output.trim(), tokensUsed: 0, model: this.model };
+    return { text: stdout.trim(), tokensUsed: 0, model: this.model };
   }
 
   private async callOllama(prompt: string, systemPrompt?: string): Promise<LLMResponse> {

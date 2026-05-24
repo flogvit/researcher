@@ -47,14 +47,13 @@ HTML:
 ${truncatedHtml}`;
 
   try {
-    const proc = Bun.spawn(['ollama', 'run', model], {
-      stdin: new Response(prompt),
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const output = await new Response(proc.stdout).text();
-    await proc.exited;
-    const link = output.trim().split('\n').pop()?.trim() ?? '';
+    const { spawnWithTimeout } = await import('../../../llm/llm');
+    const { stdout, timedOut } = await spawnWithTimeout(
+      ['ollama', 'run', model],
+      { stdin: new Response(prompt), timeoutMs: 60_000 },
+    );
+    if (timedOut) return null;
+    const link = stdout.trim().split('\n').pop()?.trim() ?? '';
     if (link === 'NONE' || link.length < 10 || !link.startsWith('http')) return null;
     return link;
   } catch {

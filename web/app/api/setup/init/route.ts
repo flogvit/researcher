@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { getDb } from '@researcher/db/connection';
 import { agentTasks } from '@researcher/db/schema';
 import { getServerContext, getProjectDir } from '@/lib/server-context';
 import { verifyAdminRequest } from '@/lib/auth';
@@ -16,8 +15,9 @@ export async function POST(request: Request) {
 
     const { db } = await getServerContext();
 
-    // Queue a bootstrap admin task
-    await db.insert(agentTasks).values({
+    // Queue a bootstrap admin task and return its id so the UI can poll
+    // /api/admin/tasks/:id for progress (issue #56).
+    const [task] = await db.insert(agentTasks).values({
       agentType: 'admin:bootstrap_project',
       status: 'pending',
       priority: 10,
@@ -25,9 +25,9 @@ export async function POST(request: Request) {
         domain: body.domain,
         language: body.language ?? 'en',
       },
-    });
+    }).returning();
 
-    return NextResponse.json({ status: 'queued', projectDir: getProjectDir() });
+    return NextResponse.json({ status: 'queued', taskId: task.id, projectDir: getProjectDir() });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: message }, { status: 500 });

@@ -1,9 +1,11 @@
 import { z } from 'zod';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Logger } from '../logger';
 import { atomicWrite } from '../upgrade';
 import type { AdminHandler } from './types';
+
+const BOOTSTRAP_MARKER = '.researcher-bootstrap-done';
 
 const log = new Logger('admin:bootstrap');
 
@@ -22,6 +24,15 @@ export const bootstrapProjectHandler: AdminHandler<typeof schema> = {
   riskLevel: 'high',
   payloadSchema: schema,
   async handle(payload, ctx) {
+    const markerPath = resolve(ctx.projectDir, BOOTSTRAP_MARKER);
+    if (existsSync(markerPath)) {
+      // A previous run finished successfully. Don't re-write files or
+      // re-create the DB — that would either overwrite user edits or
+      // duplicate work. Re-running with --force is a deliberate operation
+      // tracked separately if we need it.
+      return { status: 'already_initialized', marker: markerPath };
+    }
+
     const { bootstrapProject } = await import('../../init/bootstrap');
 
     log.info(`Bootstrapping project for domain: ${payload.domain}`);
@@ -77,6 +88,8 @@ export const bootstrapProjectHandler: AdminHandler<typeof schema> = {
       }
     }
 
+    // DB step: throw on failure so the task ends 'failed' (retryable) rather
+    // than 'completed' with status='partial' (silently stuck) — #19.
     try {
       const { SQL } = await import('bun');
       const adminClient = new SQL('postgresql://postgres@localhost:5432/postgres');
@@ -97,9 +110,18 @@ export const bootstrapProjectHandler: AdminHandler<typeof schema> = {
       await migrate(db, { migrationsFolder: resolve(packageRoot, 'drizzle') });
       migrationClient.close();
     } catch (e) {
-      log.error(`Database setup failed: ${e instanceof Error ? e.message : e}`);
-      return { status: 'partial', error: `Database setup failed: ${e instanceof Error ? e.message : e}`, config };
+      const msg = e instanceof Error ? e.message : String(e);
+      log.error(`Database setup failed: ${msg}`);
+      // No marker file — a future retry will re-attempt the DB step.
+      // Files on disk from earlier in this handler are idempotent (atomicWrite
+      // overwrites with the same content for the same config), so the retry
+      // re-runs them harmlessly and gets a clean shot at the DB.
+      throw new Error(`bootstrap: database setup failed (retryable): ${msg}`);
     }
+
+    // Marker file flips this handler into the early-return branch above on
+    // any future invocation, so we don't repeatedly redo a successful bootstrap.
+    await atomicWrite(markerPath, new Date().toISOString() + '\n');
 
     return {
       status: 'complete',

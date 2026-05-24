@@ -13,7 +13,7 @@ export default function SetupPage() {
   const startSetup = async () => {
     if (!domain.trim()) return;
     setStatus('running');
-    setProgress('Bootstrapping project... This may take a few minutes.');
+    setProgress('Queuing bootstrap task...');
 
     try {
       const response = await fetch('/api/setup/init', {
@@ -24,14 +24,41 @@ export default function SetupPage() {
 
       const data = await response.json();
 
-      if (data.status === 'complete') {
-        setStatus('done');
-        setResult(data);
-        setProgress(`Project "${data.name}" created with ${data.agents} agents and ${data.methods} methods.`);
-      } else {
+      if (!data.taskId) {
         setStatus('error');
-        setProgress(`Error: ${data.error}`);
+        setProgress(`Error: ${data.error ?? 'no task id returned'}`);
+        return;
       }
+
+      setProgress('Bootstrapping project... This may take a few minutes.');
+
+      // Poll the admin task until it completes or fails (#56).
+      const deadline = Date.now() + 15 * 60_000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 2000));
+        const taskRes = await fetch(`/api/admin/tasks/${data.taskId}`);
+        if (!taskRes.ok) continue;
+        const task = await taskRes.json();
+        if (task.status === 'completed') {
+          const r = task.result ?? {};
+          setStatus('done');
+          setResult(r);
+          if (r.status === 'partial') {
+            setProgress(`Project files written but database setup failed: ${r.error}`);
+          } else {
+            setProgress(`Project "${r.name}" created with ${r.agents} agents and ${r.methods} methods.`);
+          }
+          return;
+        }
+        if (task.status === 'failed') {
+          setStatus('error');
+          setProgress(`Error: ${task.error ?? 'bootstrap failed'}`);
+          return;
+        }
+      }
+
+      setStatus('error');
+      setProgress('Timed out waiting for bootstrap to complete (15 min).');
     } catch (e) {
       setStatus('error');
       setProgress(`Error: ${e instanceof Error ? e.message : String(e)}`);

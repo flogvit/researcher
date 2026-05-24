@@ -4,6 +4,8 @@ import { eq } from 'drizzle-orm';
 import { generateEmbedding } from '../../../llm/embeddings';
 import type { ModuleConfig } from '../../../core/module-config';
 
+const EXPECTED_EMBEDDING_DIM = 768; // matches schema vector(768) / nomic-embed-text
+
 /**
  * Process the next document waiting to be embedded.
  * Returns true if a document was processed, false if nothing to do.
@@ -34,6 +36,18 @@ export async function processNext(config?: ModuleConfig): Promise<boolean> {
     const textForEmbedding = parts.join('\n');
 
     const vector = await generateEmbedding(textForEmbedding);
+
+    // Dimension mismatch (#30): a model switch (e.g. nomic-embed-text →
+    // mxbai-embed-large) emits a different-sized vector that the schema's
+    // vector(768) column can't accept. Don't mark the doc permanently
+    // failed — leave it as 'classified' so a fix-and-retry picks it up.
+    if (vector.length !== EXPECTED_EMBEDDING_DIM) {
+      console.error(
+        `  Embedding dimension mismatch for doc ${item.id}: got ${vector.length}, expected ${EXPECTED_EMBEDDING_DIM}. ` +
+        `Check embedding.model in researcher.json. Doc left in 'classified' state for retry.`
+      );
+      return true;
+    }
 
     await db.insert(embeddings).values({
       sourceType: 'document',

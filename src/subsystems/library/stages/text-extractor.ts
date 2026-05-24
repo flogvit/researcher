@@ -144,9 +144,14 @@ export async function processNext(config?: ModuleConfig): Promise<boolean> {
         .set({ status: 'failed_extract' })
         .where(eq(documents.id, item.id));
     }
-  } catch {
+  } catch (e) {
+    // #29: the previous bare catch{} hid every failure. Log + persist the
+    // first 500 chars of the error message so docs that consistently fail
+    // can be triaged from the dashboard.
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(`text-extractor: doc ${item.id} (${item.title.slice(0, 60)}) failed: ${message}`);
     await db.update(documents)
-      .set({ status: 'failed_extract' })
+      .set({ status: 'failed_extract', rawContent: message.slice(0, 500) })
       .where(eq(documents.id, item.id));
   }
 

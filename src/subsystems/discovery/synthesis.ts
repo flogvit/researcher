@@ -4,6 +4,7 @@ import { desc, sql } from 'drizzle-orm';
 import { LLM } from '../../llm/llm';
 import { loadPrompt } from '../../core/prompt-loader';
 import { Logger } from '../../core/logger';
+import { escapeLike } from '../../core/like-escape';
 import type { ModuleConfig } from '../../core/module-config';
 
 interface Cluster {
@@ -73,8 +74,12 @@ export class SynthesisAgent {
       // Mature clusters -> create discovery for paper writing
       for (const cluster of response.data.clusters.filter(c => c.maturity === 'mature')) {
         // Check if we already have a discovery with similar title
+        // Escape LIKE metacharacters in the cluster title — without this, a
+        // title containing '%' or '_' matches unrelated discoveries and
+        // inflates the dedupe check (#28).
+        const safeTitle = escapeLike(cluster.title.slice(0, 30));
         const existing = await db.select().from(discoveries)
-          .where(sql`${discoveries.title} ILIKE ${'%' + cluster.title.slice(0, 30) + '%'}`)
+          .where(sql`${discoveries.title} ILIKE ${'%' + safeTitle + '%'}`)
           .limit(1);
 
         if (existing.length === 0) {

@@ -7,6 +7,7 @@ import { LLM, RateLimitError, createLLM } from '../../llm/llm';
 import { Logger } from '../../core/logger';
 import { loadPrompt, loadModuleConfig } from '../../core/prompt-loader';
 import { claimNextTask } from '../../core/task-queue';
+import { escapeLike } from '../../core/like-escape';
 import { Triage } from './triage';
 import { Reviewer } from './reviewer';
 import { Reflector } from './reflector';
@@ -432,9 +433,11 @@ export class ResearchDispatcher {
 
     // Keyword search on documents. One query OR'd across all keyword patterns
     // backed by trigram GIN indexes on title+content (#38). Previously this
-    // was N separate full-table scans.
+    // was N separate full-table scans. LIKE metacharacters in the keywords
+    // are escaped so a project title with '%' or '_' doesn't match the whole
+    // table (#28).
     const keywords = project.title.split(/\s+/).filter(w => w.length > 3);
-    const keywordPatterns = keywords.map(k => `%${k}%`);
+    const keywordPatterns = keywords.map(k => `%${escapeLike(k)}%`);
 
     let keywordDocs: Array<{ id: number }> = [];
     if (keywordPatterns.length > 0) {
@@ -487,8 +490,9 @@ export class ResearchDispatcher {
     // Get relevant documents via keyword search. Combined into a single query
     // backed by trigram GIN indexes (#38). Drops content from the projection
     // since the LLM-facing prompt only consumes title/summary anyway.
+    // LIKE metacharacters in keywords are escaped to prevent over-match (#28).
     const keywords = project.title.split(/\s+/).filter(w => w.length > 3);
-    const keywordPatterns = keywords.map(k => `%${k}%`);
+    const keywordPatterns = keywords.map(k => `%${escapeLike(k)}%`);
     let allDocs: Array<{ title: string; content: string | null; author: string | null; summary: string | null }> = [];
 
     if (keywordPatterns.length > 0) {

@@ -29,6 +29,13 @@
       "when": 1779840000000,
       "tag": "0003_performance_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1779926400000,
+      "tag": "0004_task_pickup_index",
+      "breakpoints": true
     }
   ]
 }

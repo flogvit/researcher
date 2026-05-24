@@ -63,18 +63,21 @@ ${truncatedHtml}`;
 
 async function fetchUrl(url: string): Promise<{ html: string; contentType: string } | null> {
   try {
-    const response = await fetch(url, {
+    const { safeFetch } = await import('../../../core/safe-fetch');
+    const { status, contentType, body } = await safeFetch(url, {
+      maxBytes: 10 * 1024 * 1024, // 10 MB plenty for an HTML page
+      timeoutMs: 30_000,
       headers: {
         'User-Agent': 'ResearchBot/1.0 (academic research)',
         'Accept': 'text/html,application/xhtml+xml,text/plain',
       },
-      redirect: 'follow',
     });
-    if (!response.ok) return null;
-    const contentType = response.headers.get('content-type') ?? '';
-    const html = await response.text();
+    if (status < 200 || status >= 300) return null;
+    const html = new TextDecoder('utf-8', { fatal: false }).decode(body);
     return { html, contentType };
   } catch {
+    // safeFetch throws SsrfError / ResponseTooLargeError on rejected URLs;
+    // text extraction is best-effort so we just skip this document (#5).
     return null;
   }
 }

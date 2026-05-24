@@ -4,8 +4,12 @@ import { eq, and, isNull } from 'drizzle-orm';
 import type { ModuleConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
 import { claimNextDownload } from '../../../core/task-queue';
+import { safeFetch, SsrfError, ResponseTooLargeError } from '../../../core/safe-fetch';
 
 const DEFAULT_DOWNLOAD_DELAY = { minMs: 2000, maxMs: 5000 };
+
+/** 50 MB cap per document body. Anything bigger is almost certainly not what we want. */
+const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
 
 /**
  * Process the next document waiting to be downloaded.
@@ -21,27 +25,26 @@ export async function processNext(config?: ModuleConfig): Promise<boolean> {
   if (!item) return false;
 
   try {
-    const response = await fetch(item.url, {
+    const { status, contentType, body } = await safeFetch(item.url, {
+      maxBytes: MAX_DOCUMENT_BYTES,
+      timeoutMs: 60_000,
       headers: {
         'User-Agent': 'ResearchBot/1.0 (academic research)',
         'Accept': 'text/html,application/xhtml+xml,application/pdf,text/plain',
       },
-      redirect: 'follow',
     });
 
-    if (!response.ok) {
+    if (status < 200 || status >= 300) {
       await db.update(documents)
-        .set({ status: 'failed_download', rawContent: `HTTP ${response.status}` })
+        .set({ status: 'failed_download', rawContent: `HTTP ${status}` })
         .where(eq(documents.id, item.id));
       return true;
     }
 
-    const contentType = response.headers.get('content-type') ?? 'unknown';
-
     if (contentType.includes('application/pdf')) {
-      // Store PDF as base64 so it fits in text column
-      const buffer = await response.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString('base64');
+      // PDFs land in raw_content as base64 — see issue #39 for why this
+      // is a future schema migration target.
+      const base64 = Buffer.from(body).toString('base64');
       await db.update(documents)
         .set({
           rawContent: base64,
@@ -51,8 +54,7 @@ export async function processNext(config?: ModuleConfig): Promise<boolean> {
         })
         .where(eq(documents.id, item.id));
     } else {
-      // HTML or text — store as-is
-      const html = await response.text();
+      const html = new TextDecoder('utf-8', { fatal: false }).decode(body);
       const detectedType = contentType.includes('text/plain') ? 'text' : 'article';
       await db.update(documents)
         .set({
@@ -66,11 +68,14 @@ export async function processNext(config?: ModuleConfig): Promise<boolean> {
 
     console.log(`  Downloaded: ${item.title.slice(0, 60)}`);
   } catch (e) {
+    // SSRF rejection and oversize bodies land here and the document gets
+    // marked failed_download with the rejection reason as raw_content.
+    const reason = e instanceof SsrfError ? `SSRF blocked: ${e.message}`
+      : e instanceof ResponseTooLargeError ? `Too large: ${e.message}`
+      : e instanceof Error ? e.message
+      : String(e);
     await db.update(documents)
-      .set({
-        status: 'failed_download',
-        rawContent: e instanceof Error ? e.message : String(e),
-      })
+      .set({ status: 'failed_download', rawContent: reason })
       .where(eq(documents.id, item.id));
   }
 

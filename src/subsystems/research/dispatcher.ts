@@ -430,18 +430,19 @@ export class ResearchDispatcher {
       this.log.warn(`Semantic search failed: ${e instanceof Error ? e.message : e}`);
     }
 
-    // Keyword search on documents
+    // Keyword search on documents. One query OR'd across all keyword patterns
+    // backed by trigram GIN indexes on title+content (#38). Previously this
+    // was N separate full-table scans.
     const keywords = project.title.split(/\s+/).filter(w => w.length > 3);
-    const keywordConditions = keywords.map(k => `%${k}%`);
+    const keywordPatterns = keywords.map(k => `%${k}%`);
 
     let keywordDocs: Array<{ id: number }> = [];
-    for (const pattern of keywordConditions) {
-      const results = await db
+    if (keywordPatterns.length > 0) {
+      keywordDocs = await db
         .select({ id: documents.id })
         .from(documents)
-        .where(sql`(${documents.title} ILIKE ${pattern} OR ${documents.content} ILIKE ${pattern})`)
-        .limit(keywordLimit);
-      keywordDocs.push(...results);
+        .where(sql`${documents.title} ILIKE ANY(${keywordPatterns}) OR ${documents.content} ILIKE ANY(${keywordPatterns})`)
+        .limit(keywordLimit * keywords.length);
     }
 
     // Combine unique document IDs
@@ -483,22 +484,24 @@ export class ResearchDispatcher {
     const db = getDb();
     const llm = this.llmFor('researcher', ctx);
 
-    // Get relevant documents via keyword search
+    // Get relevant documents via keyword search. Combined into a single query
+    // backed by trigram GIN indexes (#38). Drops content from the projection
+    // since the LLM-facing prompt only consumes title/summary anyway.
     const keywords = project.title.split(/\s+/).filter(w => w.length > 3);
-    const allDocs: Array<{ title: string; content: string | null; author: string | null; summary: string | null }> = [];
+    const keywordPatterns = keywords.map(k => `%${k}%`);
+    let allDocs: Array<{ title: string; content: string | null; author: string | null; summary: string | null }> = [];
 
-    for (const keyword of keywords) {
-      const docs = await db
+    if (keywordPatterns.length > 0) {
+      allDocs = await db
         .select({
           title: documents.title,
-          content: documents.content,
+          content: documents.summary, // we only feed summary to the LLM; cheaper to fetch
           author: documents.author,
           summary: documents.summary,
         })
         .from(documents)
-        .where(sql`(${documents.title} ILIKE ${'%' + keyword + '%'} OR ${documents.content} ILIKE ${'%' + keyword + '%'})`)
-        .limit(15);
-      allDocs.push(...docs);
+        .where(sql`${documents.title} ILIKE ANY(${keywordPatterns}) OR ${documents.content} ILIKE ANY(${keywordPatterns})`)
+        .limit(15 * keywords.length);
     }
 
     // Also get semantic matches

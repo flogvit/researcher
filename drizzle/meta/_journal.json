@@ -36,6 +36,13 @@
       "when": 1779926400000,
       "tag": "0004_task_pickup_index",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1780012800000,
+      "tag": "0005_documents_search_indexes",
+      "breakpoints": true
     }
   ]
 }

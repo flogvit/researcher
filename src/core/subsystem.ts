@@ -1,4 +1,6 @@
 import type { ProjectConfig } from '../config';
+import type { getDb } from '../db/connection';
+import type { LLM } from '../llm/llm';
 
 export type SubsystemState = 'stopped' | 'starting' | 'running' | 'idle' | 'error';
 
@@ -13,8 +15,8 @@ export interface SubsystemStatus {
 
 export interface SubsystemContext {
   config: ProjectConfig;
-  db: any; // Drizzle instance — typed properly when db module is created
-  llm: any; // LLM instance — typed properly when llm module is created
+  db: ReturnType<typeof getDb>;
+  llm: LLM;
   isReady(subsystemName: string): boolean;
   emit(event: string, data: unknown): void;
   on(event: string, handler: (data: unknown) => void): void;

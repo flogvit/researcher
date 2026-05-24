@@ -1,6 +1,6 @@
 import { getDb } from '../db/connection';
 import { reviewFeedback, agentTasks, researchLog } from '../db/schema';
-import { eq, desc, sql } from 'drizzle-orm';
+import { eq, desc, sql, inArray } from 'drizzle-orm';
 import { LLM } from '../llm/llm';
 import { loadPrompt } from './prompt-loader';
 import { Logger } from './logger';
@@ -192,11 +192,12 @@ export class Learner {
       }
     }
 
-    // 6. Mark feedback as processed
-    for (const fb of feedback) {
+    // 6. Mark feedback as processed (#45 — single bulk UPDATE, not N round-trips)
+    const feedbackIds = feedback.map(f => f.id);
+    if (feedbackIds.length > 0) {
       await db.update(reviewFeedback)
         .set({ processedByLearner: true })
-        .where(eq(reviewFeedback.id, fb.id));
+        .where(inArray(reviewFeedback.id, feedbackIds));
     }
 
     await db.insert(researchLog).values({

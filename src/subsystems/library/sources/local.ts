@@ -62,6 +62,32 @@ export async function indexLocalSource(config: LocalSourceConfig): Promise<{ add
   const recursive = config.recursive ?? true;
   const sourceName = config.name ?? basename(config.path);
 
+  // Refuse paths that point at infrastructure secrets. The shell-style
+  // expansion in glob means a hostile localSources.path of '/' or '/etc'
+  // would otherwise suck arbitrary files into the DB and onward to the LLM.
+  // This is defense-in-depth against the unauth admin API + library config
+  // rewrite chain described in #1/#4/#10.
+  const resolvedRoot = resolve(config.path);
+  const FORBIDDEN_ROOTS = [
+    '/', '/etc', '/root', '/proc', '/sys', '/dev', '/var',
+    '/private/etc', '/private/var', '/Library/Keychains',
+  ];
+  if (FORBIDDEN_ROOTS.some(p => resolvedRoot === p || resolvedRoot.startsWith(p + '/'))) {
+    log.warn(`Refusing to index local source under forbidden root: ${resolvedRoot}`);
+    return { added: 0, updated: 0, total: 0 };
+  }
+  const home = process.env.HOME;
+  if (home) {
+    const forbiddenHomeSubdirs = ['.ssh', '.aws', '.gnupg', '.kube', '.docker', '.config'];
+    for (const sub of forbiddenHomeSubdirs) {
+      const guarded = resolve(home, sub);
+      if (resolvedRoot === guarded || resolvedRoot.startsWith(guarded + '/')) {
+        log.warn(`Refusing to index local source under sensitive home dir: ${resolvedRoot}`);
+        return { added: 0, updated: 0, total: 0 };
+      }
+    }
+  }
+
   // Build glob pattern for supported extensions
   const prefix = recursive ? '**/' : '';
   const pattern = extensions.length === 1

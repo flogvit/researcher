@@ -45,7 +45,10 @@ export class NoveltyChecker {
       .where(
         and(
           sql`${findings.evidenceStrength} IN ('strong_evidence', 'proven')`,
-          sql`${findings.id} NOT IN (SELECT finding_id FROM discoveries)`,
+          // NOT EXISTS instead of NOT IN: any NULL discoveries.finding_id
+          // (the column is nullable) makes NOT IN return zero rows due to
+          // SQL's UNKNOWN semantics (#32).
+          sql`NOT EXISTS (SELECT 1 FROM discoveries d WHERE d.finding_id = ${findings.id})`,
         ),
       )
       .orderBy(desc(findings.createdAt))

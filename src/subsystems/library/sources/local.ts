@@ -73,9 +73,18 @@ export async function indexLocalSource(config: LocalSourceConfig): Promise<{ add
   let updated = 0;
   let total = 0;
 
+  // Resolve the config'd root once so we can check each scanned path stays
+  // inside it. Symlinks pointing outside would otherwise be followed (#35).
+  const { sep } = await import('node:path');
+  const sourceRoot = resolve(config.path) + sep;
+
   for await (const file of glob.scan({ cwd: config.path, absolute: true })) {
     total++;
     const filePath = resolve(file);
+    if (!filePath.startsWith(sourceRoot) && filePath + sep !== sourceRoot) {
+      console.warn(`local source: skipping ${filePath} (escapes ${config.path})`);
+      continue;
+    }
     const ext = extname(filePath);
     const contentType = getContentType(ext);
     const title = basename(filePath, ext);

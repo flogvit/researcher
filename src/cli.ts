@@ -86,24 +86,20 @@ program
       let finalDomain = domain;
       let finalLanguage = opts.language;
 
+      // readline handles multi-chunk stdin and end-of-line properly. The
+      // earlier `process.stdin.once('data')` only read the first chunk and
+      // broke on multi-line paste (#34).
+      const readlineMod = await import('node:readline/promises');
+      const rl = readlineMod.createInterface({ input: process.stdin, output: process.stdout });
+
       if (!finalDomain) {
-        process.stdout.write('Domain: ');
-        finalDomain = await new Promise<string>((resolve) => {
-          process.stdin.setEncoding('utf-8');
-          process.stdin.once('data', (chunk) => resolve(chunk.toString().trim()));
-          process.stdin.resume();
-        });
+        finalDomain = (await rl.question('Domain: ')).trim();
       }
 
       if (!finalLanguage && finalDomain) {
-        process.stdout.write('Language [en]: ');
-        finalLanguage = await new Promise<string>((resolve) => {
-          process.stdin.once('data', (chunk) => {
-            const val = chunk.toString().trim();
-            resolve(val || 'en');
-          });
-        });
+        finalLanguage = (await rl.question('Language [en]: ')).trim() || 'en';
       }
+      rl.close();
 
       if (finalDomain) {
         // AI-bootstrapped setup

@@ -32,15 +32,28 @@ export class Orchestrator {
 
       this.log.info(`Starting subsystem: ${subsystem.name}`);
 
-      // Start subsystem (non-blocking — it runs its own loop)
+      let crashed = false;
       const promise = subsystem.start(ctx).catch(e => {
+        crashed = true;
+        this.readySet.delete(subsystem.name);
         this.log.error(`Subsystem ${subsystem.name} crashed: ${e instanceof Error ? e.message : String(e)}`);
       });
       running.push(promise);
 
-      // Mark as ready immediately after launch so dependents can start
-      // In a more advanced system, the subsystem would emit a 'ready' event
-      this.readySet.add(subsystem.name);
+      // The previous version marked the subsystem ready *immediately* after
+      // launch, so a sync-throwing init left dependents starting against a
+      // dead parent (#33). We now race a short delay against the start
+      // promise so a synchronous init failure surfaces before we mark ready;
+      // sync-successful starts pass through with ~10ms latency.
+      await Promise.race([
+        promise,
+        Bun.sleep(10),
+      ]);
+      if (!crashed) {
+        this.readySet.add(subsystem.name);
+      } else {
+        this.log.error(`Skipping dependents of ${subsystem.name} — start() failed during init`);
+      }
     }
 
     // Wait for all subsystems to stop

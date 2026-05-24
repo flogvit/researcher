@@ -5,11 +5,26 @@ import { LLM } from '../llm/llm';
 import { loadPrompt } from './prompt-loader';
 import { Logger } from './logger';
 import type { ModuleConfig } from './module-config';
-import { readFile, writeFile } from 'node:fs/promises';
+import { atomicWrite } from './upgrade';
+import { assertWithinProject } from './admin-handlers/safe-path';
+import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const DEFAULT_REVIEW_THRESHOLD = 10;
+
+/**
+ * Whether a learner-proposed target name is safe to use as a prompt filename.
+ *
+ * The learner consumes feedback derived from attacker-influenced documents
+ * (the classifier and reviewer both read raw document text). If a hostile
+ * document convinces the LLM to emit `proposal.target = "../../etc/passwd"`,
+ * we would silently overwrite that file. Belt-and-braces: charset whitelist
+ * here, assertWithinProject() at the resolve-site (#7).
+ */
+function isSafeTarget(target: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(target);
+}
 
 interface Proposal {
   type: 'modify_prompt' | 'add_agent' | 'modify_config';
@@ -138,13 +153,25 @@ export class Learner {
     let rejected = 0;
 
     for (const proposal of analysis.data.proposals) {
+      if (!isSafeTarget(proposal.target)) {
+        this.log.warn(`Rejected proposal with unsafe target: ${JSON.stringify(proposal.target)}`);
+        await db.insert(researchLog).values({
+          eventType: 'learner_proposal_rejected',
+          agentType: 'learner',
+          details: { reason: 'unsafe_target', target: proposal.target, description: proposal.description },
+        });
+        rejected++;
+        continue;
+      }
+
       if (proposal.type === 'modify_prompt' && proposal.newContent) {
         const result = await this.testProposal(proposal);
         if (result) { applied++; } else { rejected++; }
       } else if (proposal.type === 'add_agent' && proposal.newContent) {
         const promptPath = resolve(this.projectDir, 'research', 'prompts', `${proposal.target}.md`);
+        assertWithinProject(promptPath, this.projectDir);
         if (!existsSync(promptPath)) {
-          await writeFile(promptPath, proposal.newContent);
+          await atomicWrite(promptPath, proposal.newContent);
           this.log.info(`Added new agent prompt: ${proposal.target}`);
           applied++;
         } else {
@@ -255,9 +282,12 @@ export class Learner {
       });
 
       if (newWon && proposal.newContent) {
-        // Apply the change
+        // testProposal is reachable from learn() so the target charset was
+        // already vetted, but check again at the write-site for symmetry.
+        if (!isSafeTarget(proposal.target)) return false;
         const promptPath = resolve(this.projectDir, 'research', 'prompts', `${proposal.target}.md`);
-        await writeFile(promptPath, proposal.newContent);
+        assertWithinProject(promptPath, this.projectDir);
+        await atomicWrite(promptPath, proposal.newContent);
         this.log.info(`Applied: ${proposal.target} — ${proposal.description}`);
         return true;
       } else {

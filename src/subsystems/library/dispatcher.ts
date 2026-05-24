@@ -1,13 +1,7 @@
 import type { SubsystemContext } from '../../core/subsystem';
-import type { SourcePlugin } from './sources/types';
 import type { ModuleConfig } from '../../core/module-config';
 import { loadModuleConfig } from '../../core/prompt-loader';
-import { doajSource } from './sources/doaj';
-import { openalexSource } from './sources/openalex';
-import { semanticScholarSource } from './sources/semantic-scholar';
-import { crossrefSource } from './sources/crossref';
-import { pubmedSource } from './sources/pubmed';
-import { arxivSource } from './sources/arxiv';
+import { getSourcePlugin } from './sources';
 import { indexLocalSource } from './sources/local';
 import * as downloader from './stages/downloader';
 import * as extractor from './stages/text-extractor';
@@ -15,16 +9,6 @@ import * as classifier from './stages/classifier';
 import * as embedder from './stages/embedder';
 import { LLM } from '../../llm/llm';
 import { Logger } from '../../core/logger';
-
-// Source plugin registry
-const SOURCE_PLUGINS: Record<string, SourcePlugin> = {
-  doaj: doajSource,
-  openalex: openalexSource,
-  'semantic-scholar': semanticScholarSource,
-  crossref: crossrefSource,
-  pubmed: pubmedSource,
-  arxiv: arxivSource,
-};
 
 export class LibraryDispatcher {
   private running = false;
@@ -124,7 +108,7 @@ export class LibraryDispatcher {
     const sources = ctx.config.library.sources.filter(s => s.enabled);
 
     for (const sourceConfig of sources) {
-      const plugin = SOURCE_PLUGINS[sourceConfig.type];
+      const plugin = getSourcePlugin(sourceConfig.type);
       if (!plugin) {
         this.log.warn(`Unknown source plugin: ${sourceConfig.type}`);
         continue;
@@ -150,7 +134,7 @@ export class LibraryDispatcher {
       const intervalMs = (sourceConfig.interval ?? 86400) * 1000;
 
       if (now - lastRun >= intervalMs) {
-        const plugin = SOURCE_PLUGINS[sourceConfig.type];
+        const plugin = getSourcePlugin(sourceConfig.type);
         if (!plugin) continue;
 
         try {

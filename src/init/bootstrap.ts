@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { LLM, createLLM } from '../llm/llm';
 import type { AgentConfig } from '../config';
 import { Glob } from 'bun';
+import { listSourcePluginTypes } from '../subsystems/library/sources';
 
 export interface BootstrapResult {
   name: string;
@@ -91,7 +92,7 @@ ${langInstruction}
 4. **searchTerms**: 30-60 DOAJ search terms. Be specific and varied — sub-fields, key concepts, methodologies, debates. English for best DOAJ coverage.
 5. **agentNames**: 2-5 kebab-case agent names suited for this domain (e.g. "exegete", "historian", "theologian"). Names can be in the project language.
 6. **methodNames**: 3-8 kebab-case methodology names relevant to this domain (e.g. "textual-criticism", "comparative-analysis")
-7. **recommendedSources**: Which academic source plugins to enable. Choose from: doaj, openalex, semantic-scholar, crossref, pubmed, arxiv. Pick those most relevant for the domain.
+7. **recommendedSources**: Which academic source plugins to enable. Choose from: ${listSourcePluginTypes().join(', ')}. Pick those most relevant for the domain.
 
 Reply with JSON:
 \`\`\`json

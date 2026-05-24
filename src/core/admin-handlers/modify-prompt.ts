@@ -2,12 +2,11 @@ import { z } from 'zod';
 import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { atomicWrite } from '../upgrade';
+import { safeName, assertWithinProject } from './safe-path';
 import type { AdminHandler } from './types';
 
 const schema = z.object({
-  name: z.string().min(1).refine(s => !s.includes('/') && !s.includes('..'), {
-    message: 'prompt name must not contain path separators',
-  }),
+  name: safeName,
   content: z.string(),
 });
 
@@ -24,6 +23,7 @@ export const modifyPrompt: AdminHandler<typeof schema> = {
     const promptsDir = resolve(ctx.projectDir, 'research', 'prompts');
     mkdirSync(promptsDir, { recursive: true });
     const promptPath = resolve(promptsDir, `${payload.name}.md`);
+    assertWithinProject(promptPath, ctx.projectDir);
 
     const existed = existsSync(promptPath);
     await atomicWrite(promptPath, payload.content);

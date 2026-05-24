@@ -3,10 +3,11 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createLLM } from '../../llm/llm';
 import { atomicWrite } from '../upgrade';
+import { safeName, assertWithinProject } from './safe-path';
 import type { AdminHandler } from './types';
 
 const schema = z.object({
-  name: z.string().min(1),
+  name: safeName,
   description: z.string(),
   domain: z.string(),
   language: z.string(),
@@ -21,6 +22,7 @@ export const createAgent: AdminHandler<typeof schema> = {
     mkdirSync(promptsDir, { recursive: true });
 
     const promptPath = resolve(promptsDir, `${payload.name}.md`);
+    assertWithinProject(promptPath, ctx.projectDir);
     if (existsSync(promptPath)) {
       return { status: 'skipped', reason: 'Agent prompt already exists' };
     }

@@ -59,4 +59,35 @@ describe('admin handler registry', () => {
     const r = h.payloadSchema.safeParse({ name: 'foo/bar' });
     expect(r.success).toBe(false);
   });
+
+  test('modify_researcher_config allows whitelisted keys (#4)', () => {
+    const h = getAdminHandler('modify_researcher_config');
+    if (!h) throw new Error('handler missing');
+    expect(h.payloadSchema.safeParse({ key: 'library.sources.0.enabled', value: true }).success).toBe(true);
+    expect(h.payloadSchema.safeParse({ key: 'research.reflectEvery', value: 5 }).success).toBe(true);
+  });
+
+  test('modify_researcher_config rejects privilege-boundary keys (#4)', () => {
+    const h = getAdminHandler('modify_researcher_config');
+    if (!h) throw new Error('handler missing');
+    // These are the exact escalation paths #1 / #4 described.
+    expect(h.payloadSchema.safeParse({ key: 'llm.allowedTools', value: ['Bash'] }).success).toBe(false);
+    expect(h.payloadSchema.safeParse({ key: 'llm.provider', value: 'claude' }).success).toBe(false);
+    expect(h.payloadSchema.safeParse({ key: 'database', value: 'evil' }).success).toBe(false);
+    expect(h.payloadSchema.safeParse({ key: 'library.localSources', value: [] }).success).toBe(false);
+  });
+
+  test('modify_config rejects path-traversal in module name (#2)', () => {
+    const h = getAdminHandler('modify_config');
+    if (!h) throw new Error('handler missing');
+    expect(h.payloadSchema.safeParse({ module: '../../etc/passwd', key: 'x', value: 1 }).success).toBe(false);
+    expect(h.payloadSchema.safeParse({ module: 'paper', key: 'x.y', value: 1 }).success).toBe(true);
+  });
+
+  test('modify_config rejects unsafe dotted keys (#2)', () => {
+    const h = getAdminHandler('modify_config');
+    if (!h) throw new Error('handler missing');
+    expect(h.payloadSchema.safeParse({ module: 'paper', key: '../escape', value: 1 }).success).toBe(false);
+    expect(h.payloadSchema.safeParse({ module: 'paper', key: 'a/b', value: 1 }).success).toBe(false);
+  });
 });

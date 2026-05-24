@@ -3,10 +3,37 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { atomicWrite } from '../upgrade';
+import { safeDottedKey } from './safe-path';
 import type { AdminHandler } from './types';
 
+/**
+ * Keys that an admin task is allowed to rewrite in researcher.json (#4).
+ *
+ * Anything that changes a privilege boundary (LLM tool surface, database
+ * URL, source paths that read arbitrary disk) is intentionally out. Edits
+ * that affect those keys are deployment decisions, not runtime data.
+ *
+ * The `[*]` wildcard matches array indices: e.g. `library.sources[*].enabled`
+ * permits `library.sources.0.enabled`, `library.sources.7.enabled`, etc.
+ */
+const ALLOWED_KEY_PATTERNS: RegExp[] = [
+  /^library\.sources\.\d+\.enabled$/,
+  /^library\.sources\.\d+\.interval$/,
+  /^library\.sources\.\d+\.settings\.searchTerms$/,
+  /^library\.sources\.\d+\.settings\.batchSize$/,
+  /^research\.reflectEvery$/,
+  /^research\.agentTypes$/,
+  /^description$/,
+  /^language$/,
+  /^orchestrator\..*$/,
+  /^embedding\.model$/,
+];
+
 const schema = z.object({
-  key: z.string().min(1),
+  key: safeDottedKey.refine(
+    k => ALLOWED_KEY_PATTERNS.some(re => re.test(k)),
+    { message: 'key not in editable-by-admin allowlist' },
+  ),
   value: z.unknown(),
 });
 

@@ -3,11 +3,12 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { atomicWrite } from '../upgrade';
+import { safeName, safeDottedKey, assertWithinProject } from './safe-path';
 import type { AdminHandler } from './types';
 
 const schema = z.object({
-  module: z.string().min(1),
-  key: z.string().min(1),
+  module: safeName,
+  key: safeDottedKey,
   value: z.unknown(),
 });
 
@@ -17,6 +18,7 @@ export const modifyConfig: AdminHandler<typeof schema> = {
   payloadSchema: schema,
   async handle(payload, ctx) {
     const configPath = resolve(ctx.projectDir, 'research', 'modules', `${payload.module}.json`);
+    assertWithinProject(configPath, ctx.projectDir);
 
     if (!existsSync(configPath)) {
       return { status: 'error', reason: `Module config not found: ${payload.module}` };

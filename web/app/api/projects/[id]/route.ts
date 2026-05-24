@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getServerContext } from '@/lib/server-context';
+import { verifyAdminRequest } from '@/lib/auth';
 import { projects, findings, agentTasks, researchLog } from '@researcher/db/schema';
 import { eq, desc } from 'drizzle-orm';
 
@@ -58,6 +59,8 @@ export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const denied = verifyAdminRequest(request);
+  if (denied) return denied;
   try {
     const { id } = await params;
     const projectId = parseInt(id, 10);

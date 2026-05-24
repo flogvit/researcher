@@ -628,17 +628,25 @@ program
   .command('start')
   .description('Start researcher (web UI, API, subsystem management, admin queue)')
   .option('--port <port>', 'Port to listen on', '3051')
+  .option('--host <host>', 'Hostname to bind to (default 127.0.0.1; pass 0.0.0.0 to expose on LAN)', '127.0.0.1')
   .action(async (opts) => {
     const { resolve } = await import('node:path');
     const port = parseInt(opts.port);
     const webDir = resolve(import.meta.dir, '..', 'web');
-    const nextProc = Bun.spawn(['bun', '--bun', 'next', 'dev', '-p', String(port)], {
-      cwd: webDir,
-      env: { ...process.env, RESEARCHER_PROJECT_DIR: process.cwd() },
-      stdout: 'inherit',
-      stderr: 'inherit',
-    });
-    console.log(`\nResearcher running at http://localhost:${port}\n`);
+    // Bind to loopback by default so the admin API isn't reachable from the
+    // LAN (issue #1). Users who explicitly opt into LAN exposure via --host
+    // 0.0.0.0 should set RESEARCHER_ADMIN_TOKEN so verifyAdminRequest enforces
+    // bearer auth on every mutating route.
+    const nextProc = Bun.spawn(
+      ['bun', '--bun', 'next', 'dev', '-p', String(port), '-H', opts.host],
+      {
+        cwd: webDir,
+        env: { ...process.env, RESEARCHER_PROJECT_DIR: process.cwd() },
+        stdout: 'inherit',
+        stderr: 'inherit',
+      },
+    );
+    console.log(`\nResearcher running at http://${opts.host}:${port}\n`);
     const shutdown = () => { nextProc.kill(); process.exit(0); };
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);

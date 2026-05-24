@@ -2,8 +2,11 @@ import { NextResponse } from 'next/server';
 import { getDb } from '@researcher/db/connection';
 import { agentTasks } from '@researcher/db/schema';
 import { getServerContext, getProjectDir } from '@/lib/server-context';
+import { verifyAdminRequest } from '@/lib/auth';
 
 export async function POST(request: Request) {
+  const denied = verifyAdminRequest(request);
+  if (denied) return denied;
   try {
     const body = await request.json() as { domain: string; language?: string };
 

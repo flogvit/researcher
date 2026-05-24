@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getServerContext } from '@/lib/server-context';
+import { verifyAdminRequest } from '@/lib/auth';
 import { agentTasks } from '@researcher/db/schema';
 
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const denied = verifyAdminRequest(request);
+  if (denied) return denied;
   try {
     const { id } = await params;
     const projectId = parseInt(id, 10);

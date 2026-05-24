@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getServerContext } from '@/lib/server-context';
+import { verifyAdminRequest } from '@/lib/auth';
 
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ name: string }> },
 ) {
+  const denied = verifyAdminRequest(request);
+  if (denied) return denied;
   try {
     const { name } = await params;
     const { manager } = await getServerContext();

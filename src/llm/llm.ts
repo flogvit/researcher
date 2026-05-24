@@ -1,3 +1,71 @@
+/**
+ * Extract a JSON value from LLM output.
+ *
+ * Order of attempts:
+ *  1. ```json ... ``` fenced block (preferred — the LLM was asked for this)
+ *  2. ``` ... ``` plain fenced block
+ *  3. Balanced-brace scan for first valid {...} or [...]
+ *
+ * The brace scanner tracks string state (with backslash escapes) so braces
+ * inside JSON strings don't confuse balance counting. We try each candidate
+ * with JSON.parse and keep the first one that parses; this avoids the previous
+ * greedy /(\{[\s\S]*\})/ regex which matched from the first `{` to the last `}`
+ * in prose and produced silent garbage. See issue #18.
+ */
+export function extractJSON<T>(text: string): { ok: true; data: T } | { ok: false; error: string } {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fenced) {
+    const r = tryParse<T>(fenced[1]);
+    if (r.ok) return r;
+  }
+
+  for (const candidate of scanBalanced(text)) {
+    const r = tryParse<T>(candidate);
+    if (r.ok) return r;
+  }
+
+  return { ok: false, error: 'No valid JSON found in response' };
+}
+
+function tryParse<T>(s: string): { ok: true; data: T } | { ok: false; error: string } {
+  try {
+    return { ok: true, data: JSON.parse(s) as T };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+function* scanBalanced(text: string): Generator<string> {
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch !== '{' && ch !== '[') continue;
+    const end = findMatchingClose(text, i);
+    if (end > i) yield text.slice(i, end + 1);
+  }
+}
+
+function findMatchingClose(text: string, start: number): number {
+  const open = text[start];
+  const close = open === '{' ? '}' : ']';
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === open) depth++;
+    else if (ch === close) {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 // Rate limit detection patterns (from flogvit-coder)
 const RATE_LIMIT_PATTERNS = [
   /rate.?limit/i,
@@ -137,22 +205,12 @@ export class LLM {
         attempt === 0 ? prompt : `${prompt}\n\nIMPORTANT: Reply ONLY with valid JSON in a json code block. No other text.`,
         systemPrompt,
       );
-      const text = response.text;
 
-      const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/)
-        || text.match(/(\{[\s\S]*\})/);
-      if (!jsonMatch) {
-        if (attempt === 0) continue;
-        throw new Error(`No JSON found in response: ${text.slice(0, 200)}`);
-      }
+      const parsed = extractJSON<T>(response.text);
+      if (parsed.ok) return { ...response, data: parsed.data };
 
-      try {
-        const data = JSON.parse(jsonMatch[1]) as T;
-        return { ...response, data };
-      } catch (e) {
-        if (attempt === 0) continue;
-        throw e;
-      }
+      if (attempt === 0) continue;
+      throw new Error(`${parsed.error}: ${response.text.slice(0, 200)}`);
     }
     throw new Error('Failed to get valid JSON after 2 attempts');
   }

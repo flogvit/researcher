@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { LLM, createLLM } from '../llm/llm';
-import type { AgentConfig } from '../config';
 import { Glob } from 'bun';
 import { listSourcePluginTypes } from '../subsystems/library/sources';
 
@@ -64,8 +63,12 @@ const defaultBootstrapConfig = {
   allowedTools: ['WebSearch', 'WebFetch'],
 };
 
-export async function bootstrapProject(domain: string, language?: string, agents?: Record<string, AgentConfig>): Promise<BootstrapResult> {
-  const llm = createLLM('bootstrap', defaultBootstrapConfig, agents);
+export async function bootstrapProject(domain: string, language?: string): Promise<BootstrapResult> {
+  // The bootstrap LLM config is intentionally minimal and fixed (Claude opus
+  // with read-only web tools) — bootstrapping happens before a project's own
+  // agent configs exist (#68). The previously-accepted `agents` param was
+  // dead code; dropped.
+  const llm = createLLM('bootstrap', defaultBootstrapConfig);
 
   console.log('Loading default prompts and module configs...');
   const [defaultPrompts, defaultModuleConfigs] = await Promise.all([

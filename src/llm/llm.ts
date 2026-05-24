@@ -217,15 +217,34 @@ export class LLM {
   private maxTurns: number;
   private timeoutMs: number;
 
-  // Shared rate limit state — when one call hits limit, all pause
-  private static rateLimitedUntil = 0;
+  // Per-provider rate-limit state. A codex 429 no longer pauses Claude calls
+  // and vice versa (#69). Static for now; cross-process coordination via DB
+  // is a future step if needed.
+  private static rateLimitedUntil: Map<string, number> = new Map();
 
-  static isCurrentlyRateLimited(): boolean {
-    return Date.now() < LLM.rateLimitedUntil;
+  /** True if the given provider is rate-limited. Omit to check any provider. */
+  static isCurrentlyRateLimited(provider?: string): boolean {
+    const now = Date.now();
+    if (provider) return now < (LLM.rateLimitedUntil.get(provider) ?? 0);
+    for (const until of LLM.rateLimitedUntil.values()) {
+      if (now < until) return true;
+    }
+    return false;
   }
 
-  static getRateLimitWaitMs(): number {
-    return Math.max(0, LLM.rateLimitedUntil - Date.now());
+  /** Wait time for the given provider, or the soonest if any are rate-limited. */
+  static getRateLimitWaitMs(provider?: string): number {
+    if (provider) return Math.max(0, (LLM.rateLimitedUntil.get(provider) ?? 0) - Date.now());
+    let max = 0;
+    for (const until of LLM.rateLimitedUntil.values()) {
+      max = Math.max(max, until - Date.now());
+    }
+    return Math.max(0, max);
+  }
+
+  /** Mark a provider as rate-limited until the given timestamp. */
+  static markRateLimited(provider: string, untilMs: number): void {
+    LLM.rateLimitedUntil.set(provider, untilMs);
   }
 
   private ollamaReady = false;
@@ -250,10 +269,11 @@ export class LLM {
   }
 
   async call(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
-    // Wait if rate limited
-    if (LLM.isCurrentlyRateLimited()) {
-      const waitMs = LLM.getRateLimitWaitMs();
-      throw new RateLimitError(`Rate limited. Waiting ${Math.ceil(waitMs / 60_000)} minutes.`, waitMs);
+    // Wait only if THIS provider is rate-limited. A codex 429 no longer
+    // pauses Claude calls and vice versa (#69).
+    if (LLM.isCurrentlyRateLimited(this.provider)) {
+      const waitMs = LLM.getRateLimitWaitMs(this.provider);
+      throw new RateLimitError(`${this.provider} rate limited. Waiting ${Math.ceil(waitMs / 60_000)} minutes.`, waitMs);
     }
 
     switch (this.provider) {
@@ -309,7 +329,7 @@ export class LLM {
 
     if (exitCode !== 0 && isRateLimited(combined)) {
       const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000;
-      LLM.rateLimitedUntil = Date.now() + delayMs;
+      LLM.markRateLimited(this.provider, Date.now() + delayMs);
       const delayMin = Math.ceil(delayMs / 60_000);
       console.error(`Rate limited! Pausing all Claude calls for ${delayMin} minutes.`);
       console.error(`   Raw output: ${combined.slice(0, 300)}`);
@@ -343,7 +363,7 @@ export class LLM {
 
     if (exitCode !== 0 && isRateLimited(combined)) {
       const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000;
-      LLM.rateLimitedUntil = Date.now() + delayMs;
+      LLM.markRateLimited(this.provider, Date.now() + delayMs);
       throw new RateLimitError(`Rate limited. Waiting ${Math.ceil(delayMs / 60_000)} minutes.`, delayMs);
     }
 
@@ -373,7 +393,7 @@ export class LLM {
 
     if (exitCode !== 0 && isRateLimited(combined)) {
       const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000;
-      LLM.rateLimitedUntil = Date.now() + delayMs;
+      LLM.markRateLimited(this.provider, Date.now() + delayMs);
       throw new RateLimitError(`Rate limited. Waiting ${Math.ceil(delayMs / 60_000)} minutes.`, delayMs);
     }
 

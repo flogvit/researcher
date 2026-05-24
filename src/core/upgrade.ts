@@ -1,10 +1,36 @@
-import { readFile, writeFile, rename, readdir, rmdir } from 'node:fs/promises';
+import { readFile, writeFile, rename, readdir, rmdir, copyFile, unlink } from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Glob } from 'bun';
 import { Logger } from './logger';
 
 const log = new Logger('upgrade');
+
+/**
+ * Write a file atomically: write to a sibling `.tmp` then rename into place.
+ * On POSIX, rename is atomic within the same filesystem — a crash either
+ * leaves the original file intact or the new file fully written, never
+ * truncated. See issue #20.
+ */
+export async function atomicWrite(filePath: string, content: string): Promise<void> {
+  const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  await writeFile(tmp, content);
+  try {
+    await rename(tmp, filePath);
+  } catch (e) {
+    // Best-effort cleanup if rename failed
+    await unlink(tmp).catch(() => {});
+    throw e;
+  }
+}
+
+/**
+ * Take a `.bak` copy of a file if it exists. No-op when the file is missing.
+ */
+async function backupFile(filePath: string): Promise<void> {
+  if (!existsSync(filePath)) return;
+  await copyFile(filePath, `${filePath}.bak`);
+}
 
 interface UpgradeResult {
   configUpdated: string[];
@@ -86,7 +112,8 @@ export async function upgradeProject(projectDir: string): Promise<UpgradeResult>
   result.configUpdated.push(...added);
 
   if (result.configUpdated.length > 0) {
-    await writeFile(configPath, JSON.stringify(config, null, 2) + '\n');
+    await backupFile(configPath);
+    await atomicWrite(configPath, JSON.stringify(config, null, 2) + '\n');
     log.info(`Updated researcher.json: added ${result.configUpdated.join(', ')}`);
   }
 
@@ -107,13 +134,14 @@ export async function upgradeProject(projectDir: string): Promise<UpgradeResult>
       const existing = JSON.parse(await readFile(projectModulePath, 'utf-8'));
       const moduleAdded = deepMergeDefaults(existing, defaultContent);
       if (moduleAdded.length > 0) {
-        await writeFile(projectModulePath, JSON.stringify(existing, null, 2) + '\n');
+        await backupFile(projectModulePath);
+        await atomicWrite(projectModulePath, JSON.stringify(existing, null, 2) + '\n');
         result.moduleConfigsUpdated.push(`${moduleName}: ${moduleAdded.join(', ')}`);
         log.info(`Updated ${moduleName}.json: added ${moduleAdded.join(', ')}`);
       }
     } else {
       // Create new module config from defaults
-      await writeFile(projectModulePath, JSON.stringify(defaultContent, null, 2) + '\n');
+      await atomicWrite(projectModulePath, JSON.stringify(defaultContent, null, 2) + '\n');
       result.moduleConfigsUpdated.push(`${moduleName}: created`);
       log.info(`Created ${moduleName}.json from defaults`);
     }
@@ -130,7 +158,7 @@ export async function upgradeProject(projectDir: string): Promise<UpgradeResult>
     const projectPromptPath = resolve(promptsDir, file);
     if (!existsSync(projectPromptPath)) {
       const content = await readFile(resolve(defaultPromptsDir, file), 'utf-8');
-      await writeFile(projectPromptPath, content);
+      await atomicWrite(projectPromptPath, content);
       result.promptsAdded.push(file.replace('.md', ''));
       log.info(`Added missing prompt: ${file}`);
     }

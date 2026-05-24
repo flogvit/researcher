@@ -5,7 +5,8 @@ import { LLM, createLLM } from '../llm/llm';
 import type { ProjectConfig } from '../config';
 import { Logger } from './logger';
 import { ADMIN_PREFIX, claimNextTask } from './task-queue';
-import { writeFile, readFile } from 'node:fs/promises';
+import { atomicWrite } from './upgrade';
+import { readFile } from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -118,7 +119,7 @@ Description: ${payload.description}
 Include: role description, methods, rules for analysis, evidence strength guidelines, output format.
 Write ONLY the markdown content.`);
 
-  await writeFile(promptPath, response.text);
+  await atomicWrite(promptPath, response.text);
 
   return { status: 'created', path: promptPath, length: response.text.length };
 }
@@ -144,7 +145,7 @@ async function handleModifyConfig(
   const oldValue = obj[keys[keys.length - 1]];
   obj[keys[keys.length - 1]] = payload.value;
 
-  await writeFile(configPath, JSON.stringify(config, null, 2));
+  await atomicWrite(configPath, JSON.stringify(config, null, 2));
 
   return { status: 'updated', key: payload.key, oldValue, newValue: payload.value };
 }
@@ -169,7 +170,7 @@ async function handleModifyResearcherConfig(
   const oldValue = obj[keys[keys.length - 1]];
   obj[keys[keys.length - 1]] = payload.value;
 
-  await writeFile(configPath, JSON.stringify(config, null, 2) + '\n');
+  await atomicWrite(configPath, JSON.stringify(config, null, 2) + '\n');
 
   return { status: 'updated', key: payload.key, oldValue, newValue: payload.value };
 }
@@ -183,7 +184,7 @@ async function handleModifyPrompt(
   const promptPath = resolve(promptsDir, `${payload.name}.md`);
 
   const existed = existsSync(promptPath);
-  await writeFile(promptPath, payload.content);
+  await atomicWrite(promptPath, payload.content);
 
   return { status: existed ? 'updated' : 'created', path: promptPath, length: payload.content.length };
 }

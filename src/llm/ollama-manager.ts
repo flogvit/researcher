@@ -90,21 +90,45 @@ export async function stopModel(model: string, baseUrl = 'http://localhost:11434
   }
 }
 
+// Tracks an ollama serve process that researcher itself started, so we can
+// terminate it on shutdown instead of orphaning it across restarts (#17).
+// Stays null when ollama was already running (we don't own that process).
+let ownedServer: Bun.Subprocess | null = null;
+let shutdownHooksAttached = false;
+
+function attachShutdownHooks(): void {
+  if (shutdownHooksAttached) return;
+  shutdownHooksAttached = true;
+
+  const stop = () => {
+    if (ownedServer && ownedServer.exitCode === null) {
+      try { ownedServer.kill(); } catch { /* already gone */ }
+    }
+  };
+
+  process.on('exit', stop);
+  process.on('SIGINT', () => { stop(); process.exit(130); });
+  process.on('SIGTERM', () => { stop(); process.exit(143); });
+}
+
 /**
  * Ensure Ollama server is running. Start it if not.
+ *
+ * If we start it, we keep the child handle and kill it on SIGINT/SIGTERM/exit
+ * so a Ctrl+C on `researcher start` no longer leaves an orphaned `ollama serve`
+ * holding port 11434 across restarts.
  */
 export async function ensureOllamaRunning(baseUrl = 'http://localhost:11434'): Promise<boolean> {
   if (await isOllamaRunning(baseUrl)) return true;
 
   log.info('Ollama not running, starting...');
   try {
-    // Start ollama serve in background
-    Bun.spawn(['ollama', 'serve'], {
+    ownedServer = Bun.spawn(['ollama', 'serve'], {
       stdout: 'ignore',
       stderr: 'ignore',
     });
+    attachShutdownHooks();
 
-    // Wait for it to come up
     for (let i = 0; i < 30; i++) {
       await Bun.sleep(1000);
       if (await isOllamaRunning(baseUrl)) {
@@ -117,5 +141,16 @@ export async function ensureOllamaRunning(baseUrl = 'http://localhost:11434'): P
   } catch (e) {
     log.error(`Failed to start Ollama: ${e instanceof Error ? e.message : e}`);
     return false;
+  }
+}
+
+/**
+ * Stop the ollama serve process if researcher started it.
+ * Exposed so the CLI's start command can shut it down with the rest of the app.
+ */
+export function stopOwnedOllama(): void {
+  if (ownedServer && ownedServer.exitCode === null) {
+    try { ownedServer.kill(); } catch { /* already gone */ }
+    ownedServer = null;
   }
 }

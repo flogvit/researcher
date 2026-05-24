@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerContext } from '@/lib/server-context';
 import { agentTasks } from '@researcher/db/schema';
+import { getAdminHandler } from '@researcher/core/admin-handlers';
 import { sql, desc } from 'drizzle-orm';
 
 export async function GET() {
@@ -32,6 +33,22 @@ export async function POST(request: Request) {
     if (!body.type || !body.payload) {
       return NextResponse.json(
         { error: 'type and payload are required' },
+        { status: 400 },
+      );
+    }
+
+    const handler = getAdminHandler(body.type);
+    if (!handler) {
+      return NextResponse.json(
+        { error: `Unknown admin task type: ${body.type}` },
+        { status: 400 },
+      );
+    }
+
+    const parsed = handler.payloadSchema.safeParse(body.payload);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Invalid payload', details: parsed.error.issues },
         { status: 400 },
       );
     }

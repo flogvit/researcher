@@ -11,13 +11,17 @@ import {
   boolean,
 } from 'drizzle-orm/pg-core';
 
+// Forward declarations resolved at module init — projects is defined below
+// but the agentTasks FK references it. Drizzle handles the cycle via the
+// arrow function in references().
+
 // Task queue for agents
 export const agentTasks = pgTable('agent_tasks', {
   id: serial('id').primaryKey(),
   agentType: varchar('agent_type', { length: 100 }).notNull(),
   status: varchar('status', { length: 20 }).notNull().default('pending'),
   priority: integer('priority').notNull().default(0),
-  projectId: integer('project_id'),
+  projectId: integer('project_id').references((): any => projects.id, { onDelete: 'cascade' }),
   payload: jsonb('payload').notNull(),
   result: jsonb('result'),
   error: text('error'),
@@ -34,8 +38,8 @@ export const agentTasks = pgTable('agent_tasks', {
 export const findings = pgTable('findings', {
   id: serial('id').primaryKey(),
   agentType: varchar('agent_type', { length: 100 }).notNull(),
-  taskId: integer('task_id'),
-  projectId: integer('project_id'),
+  taskId: integer('task_id').references((): any => agentTasks.id, { onDelete: 'set null' }),
+  projectId: integer('project_id').references((): any => projects.id, { onDelete: 'cascade' }),
   finding: text('finding').notNull(),
   evidenceStrength: varchar('evidence_strength', { length: 20 }).notNull(),
   reasoning: text('reasoning').notNull(),
@@ -73,7 +77,8 @@ export const agentState = pgTable('agent_state', {
 // Discoveries — potentially unique findings that go through verification pipeline
 export const discoveries = pgTable('discoveries', {
   id: serial('id').primaryKey(),
-  findingId: integer('finding_id').notNull(),
+  // Migration 0006 relaxed this to nullable so ON DELETE SET NULL is legal.
+  findingId: integer('finding_id').references(() => findings.id, { onDelete: 'set null' }),
   title: text('title').notNull(),
   claim: text('claim').notNull(),
   evidenceStrength: varchar('evidence_strength', { length: 20 }).notNull(),

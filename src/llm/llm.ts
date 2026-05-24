@@ -300,6 +300,46 @@ export class LLM {
     throw new Error('Failed to get valid JSON after 2 attempts');
   }
 
+  /**
+   * Shared CLI-provider invocation (#63).
+   *
+   * Handles timeout, rate-limit-message scraping, exit-code reporting in one
+   * place so the per-provider wrappers shrink to argv assembly. Adding a new
+   * CLI provider is now ~5 lines (the OpenClaw TODO).
+   */
+  private async runCliProvider(
+    cmd: string[],
+    options: { stdin?: string } = {},
+  ): Promise<LLMResponse> {
+    const provider = this.provider;
+    const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(cmd, {
+      stdin: options.stdin === undefined ? undefined : new Response(options.stdin),
+      timeoutMs: this.timeoutMs,
+    });
+
+    if (timedOut) {
+      throw new Error(`${provider} timed out after ${this.timeoutMs}ms`);
+    }
+
+    const combined = `${stdout}\n${stderr}`;
+
+    if (exitCode !== 0 && isRateLimited(combined)) {
+      const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000;
+      LLM.markRateLimited(provider, Date.now() + delayMs);
+      const delayMin = Math.ceil(delayMs / 60_000);
+      console.error(`Rate limited! Pausing ${provider} calls for ${delayMin} minutes.`);
+      console.error(`   Raw output: ${combined.slice(0, 300)}`);
+      throw new RateLimitError(`${provider} rate limited. Waiting ${delayMin} minutes.`, delayMs);
+    }
+
+    if (exitCode !== 0) {
+      const errMsg = stderr.trim() || stdout.trim();
+      throw new Error(`${provider} exited with code ${exitCode}: ${errMsg.slice(0, 500)}`);
+    }
+
+    return { text: stdout.trim(), tokensUsed: 0, model: this.model };
+  }
+
   private async callClaude(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
     const args: string[] = [
       '-p',
@@ -307,101 +347,23 @@ export class LLM {
       '--model', this.model,
       '--max-turns', String(this.maxTurns),
       '--dangerously-skip-permissions',
+      '--allowedTools', this.allowedTools.join(','),
     ];
+    if (systemPrompt) args.push('--system-prompt', systemPrompt);
 
-    if (systemPrompt) {
-      args.push('--system-prompt', systemPrompt);
-    }
-
-    // Always-on: the LLM is never invoked without an explicit tool surface (#3).
-    args.push('--allowedTools', this.allowedTools.join(','));
-
-    const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
-      ['claude', ...args],
-      { stdin: new Response(prompt), timeoutMs: this.timeoutMs },
-    );
-
-    if (timedOut) {
-      throw new Error(`claude timed out after ${this.timeoutMs}ms`);
-    }
-
-    const combined = `${stdout}\n${stderr}`;
-
-    if (exitCode !== 0 && isRateLimited(combined)) {
-      const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000;
-      LLM.markRateLimited(this.provider, Date.now() + delayMs);
-      const delayMin = Math.ceil(delayMs / 60_000);
-      console.error(`Rate limited! Pausing all Claude calls for ${delayMin} minutes.`);
-      console.error(`   Raw output: ${combined.slice(0, 300)}`);
-      throw new RateLimitError(`Rate limited. Waiting ${delayMin} minutes.`, delayMs);
-    }
-
-    if (exitCode !== 0) {
-      const errMsg = stderr.trim() || stdout.trim();
-      throw new Error(`claude exited with code ${exitCode}: ${errMsg.slice(0, 500)}`);
-    }
-
-    return { text: stdout.trim(), tokensUsed: 0, model: this.model };
+    return this.runCliProvider(['claude', ...args], { stdin: prompt });
   }
 
   private async callCodex(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
     const args: string[] = ['exec', '-m', this.model];
-    if (systemPrompt) {
-      args.push('--system-prompt', systemPrompt);
-    }
+    if (systemPrompt) args.push('--system-prompt', systemPrompt);
 
-    const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
-      ['codex', ...args],
-      { stdin: new Response(prompt), timeoutMs: this.timeoutMs },
-    );
-
-    if (timedOut) {
-      throw new Error(`codex timed out after ${this.timeoutMs}ms`);
-    }
-
-    const combined = `${stdout}\n${stderr}`;
-
-    if (exitCode !== 0 && isRateLimited(combined)) {
-      const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000;
-      LLM.markRateLimited(this.provider, Date.now() + delayMs);
-      throw new RateLimitError(`Rate limited. Waiting ${Math.ceil(delayMs / 60_000)} minutes.`, delayMs);
-    }
-
-    if (exitCode !== 0) {
-      throw new Error(`codex exited with code ${exitCode}: ${(stderr.trim() || stdout.trim()).slice(0, 500)}`);
-    }
-
-    return { text: stdout.trim(), tokensUsed: 0, model: this.model };
+    return this.runCliProvider(['codex', ...args], { stdin: prompt });
   }
 
   private async callOpenCode(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
-    const args: string[] = ['run', '-m', this.model];
-
     const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
-    args.push(fullPrompt);
-
-    const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
-      ['opencode', ...args],
-      { timeoutMs: this.timeoutMs },
-    );
-
-    if (timedOut) {
-      throw new Error(`opencode timed out after ${this.timeoutMs}ms`);
-    }
-
-    const combined = `${stdout}\n${stderr}`;
-
-    if (exitCode !== 0 && isRateLimited(combined)) {
-      const delayMs = parseRateLimitDelay(combined) ?? 5 * 60_000;
-      LLM.markRateLimited(this.provider, Date.now() + delayMs);
-      throw new RateLimitError(`Rate limited. Waiting ${Math.ceil(delayMs / 60_000)} minutes.`, delayMs);
-    }
-
-    if (exitCode !== 0) {
-      throw new Error(`opencode exited with code ${exitCode}: ${(stderr.trim() || stdout.trim()).slice(0, 500)}`);
-    }
-
-    return { text: stdout.trim(), tokensUsed: 0, model: this.model };
+    return this.runCliProvider(['opencode', 'run', '-m', this.model, fullPrompt]);
   }
 
   private async callOllama(prompt: string, systemPrompt?: string): Promise<LLMResponse> {

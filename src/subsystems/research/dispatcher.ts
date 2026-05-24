@@ -234,7 +234,17 @@ export class ResearchDispatcher {
         this.log.info(`Task ${task.id} completed (${task.agentType}): ${result.evidenceStrength}`);
         return true;
       } catch (error) {
-        if (error instanceof RateLimitError) throw error;
+        if (error instanceof RateLimitError) {
+          // Rate-limit is transient — reset the task so it gets retried after
+          // the provider recovers. Without this the task is stuck in_progress
+          // forever (#23). recoverStaleTasks at startup is the safety net,
+          // but recovering inline is cheaper than waiting for a restart.
+          await db.update(agentTasks)
+            .set({ status: 'pending', startedAt: null })
+            .where(eq(agentTasks.id, task.id));
+          this.log.warn(`Task ${task.id} reset to pending due to rate-limit`);
+          throw error;
+        }
 
         const message = error instanceof Error ? error.message : String(error);
         await db.update(agentTasks)

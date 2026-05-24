@@ -24,7 +24,8 @@ interface ServerContext {
 
 let _context: ServerContext | null = null;
 let _initPromise: Promise<ServerContext> | null = null;
-let _adminInterval: ReturnType<typeof setInterval> | null = null;
+let _adminTimer: ReturnType<typeof setTimeout> | null = null;
+let _adminInFlight = false;
 
 function findProjectDir(): string {
   if (process.env.RESEARCHER_PROJECT_DIR) return process.env.RESEARCHER_PROJECT_DIR;
@@ -78,15 +79,29 @@ async function initialize(): Promise<ServerContext> {
     },
   };
 
-  // Start admin queue processor
-  if (!_adminInterval) {
-    _adminInterval = setInterval(async () => {
+  // Start admin queue processor.
+  //
+  // setTimeout-chained rather than setInterval-based so a slow tick can't
+  // overlap with the next one (issue #22). The in-flight guard is belt-and-
+  // braces protection for the case where a tick reschedules earlier than
+  // expected. Errors are logged with full stack instead of swallowed.
+  if (!_adminTimer) {
+    const tick = async () => {
+      if (_adminInFlight) {
+        _adminTimer = setTimeout(tick, 5000);
+        return;
+      }
+      _adminInFlight = true;
       try {
         await processAdminTasks(config, projectDir);
-      } catch {
-        // silently ignore admin task errors
+      } catch (e) {
+        console.error('[admin] processAdminTasks failed:', e instanceof Error ? e.stack ?? e.message : e);
+      } finally {
+        _adminInFlight = false;
+        _adminTimer = setTimeout(tick, 5000);
       }
-    }, 5000);
+    };
+    _adminTimer = setTimeout(tick, 5000);
   }
 
   return { initialized: true, config, manager, ctx, projectDir, db };

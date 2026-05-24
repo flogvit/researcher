@@ -15,20 +15,6 @@ export async function isOllamaRunning(baseUrl = 'http://localhost:11434'): Promi
 }
 
 /**
- * List currently loaded/running models.
- */
-export async function listRunningModels(baseUrl = 'http://localhost:11434'): Promise<string[]> {
-  try {
-    const response = await fetch(`${baseUrl}/api/ps`);
-    if (!response.ok) return [];
-    const data = await response.json() as { models: Array<{ name: string }> };
-    return data.models?.map(m => m.name) ?? [];
-  } catch {
-    return [];
-  }
-}
-
-/**
  * List available (downloaded) models.
  */
 export async function listAvailableModels(baseUrl = 'http://localhost:11434'): Promise<string[]> {
@@ -70,22 +56,6 @@ export async function ensureModel(model: string, baseUrl = 'http://localhost:114
     return true;
   } catch (e) {
     log.error(`Failed to pull ${model}: ${e instanceof Error ? e.message : e}`);
-    return false;
-  }
-}
-
-/**
- * Stop a running model to free VRAM.
- */
-export async function stopModel(model: string, baseUrl = 'http://localhost:11434'): Promise<boolean> {
-  try {
-    const proc = Bun.spawn(['ollama', 'stop', model], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    await proc.exited;
-    return proc.exitCode === 0;
-  } catch {
     return false;
   }
 }

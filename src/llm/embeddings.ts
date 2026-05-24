@@ -12,10 +12,6 @@ export function initEmbeddingConfig(config: ProjectConfig): void {
   embeddingModel = config.embedding?.model ?? 'nomic-embed-text';
 }
 
-export function setEmbeddingBatchSize(size: number): void {
-  embeddingBatchSize = size;
-}
-
 export async function generateEmbedding(text: string): Promise<number[]> {
   const response = await fetch(`${embeddingBaseUrl}/api/embed`, {
     method: 'POST',

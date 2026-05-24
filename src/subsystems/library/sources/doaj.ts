@@ -133,10 +133,3 @@ export const doajSource: SourcePlugin = {
     return { added: totalAdded, total: grandTotal };
   },
 };
-
-/**
- * Convenience function for running the DOAJ source directly.
- */
-export async function run(settings: Record<string, unknown>): Promise<void> {
-  await doajSource.fetch(settings);
-}

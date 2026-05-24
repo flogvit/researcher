@@ -358,27 +358,29 @@ export class ResearchDispatcher {
 
     const db = getDb();
 
-    // Find active projects that have no pending/in_progress tasks with their projectId
+    // Single GROUP BY query instead of N+1 COUNTs per tick. Each tick is
+    // every 2s and active-project count grows linearly; #43.
     const activeProjects = await db
       .select()
       .from(projects)
       .where(eq(projects.status, 'active'));
+    if (activeProjects.length === 0) return;
+
+    const activeIds = activeProjects.map(p => p.id);
+    const counts = await db.execute<{ project_id: number; n: number }>(sql`
+      SELECT project_id, COUNT(*)::int AS n
+      FROM agent_tasks
+      WHERE project_id = ANY(${activeIds})
+        AND status IN ('pending','in_progress')
+      GROUP BY project_id
+    `);
+    const countRows = (counts as unknown as { rows?: Array<{ project_id: number; n: number }> }).rows
+      ?? (Array.isArray(counts) ? (counts as Array<{ project_id: number; n: number }>) : []);
+    const taskCountByProject = new Map(countRows.map(r => [r.project_id, r.n]));
 
     for (const project of activeProjects) {
-      // Check if project has pending or in_progress tasks
-      const [taskCount] = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(agentTasks)
-        .where(
-          and(
-            eq(agentTasks.projectId, project.id),
-            sql`${agentTasks.status} IN ('pending', 'in_progress')`,
-          ),
-        );
+      if ((taskCountByProject.get(project.id) ?? 0) > 0) continue;
 
-      if (Number(taskCount.count) > 0) continue;
-
-      // No active tasks — advance the phase
       try {
         await this.runProjectPhase(project, ctx);
       } catch (e) {

@@ -37,17 +37,26 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 export async function embedFindings(): Promise<number> {
   const db = getDb();
 
-  // Find findings that don't have embeddings yet
-  const unembedded = await db
-    .select({ id: findings.id, finding: findings.finding, reasoning: findings.reasoning })
-    .from(findings)
-    .where(
-      sql`${findings.id} NOT IN (SELECT source_id FROM embeddings WHERE source_type = 'finding' AND source_id IS NOT NULL)`
-    )
-    .limit(embeddingBatchSize);
+  // LEFT JOIN ... WHERE NULL — same set as the previous NOT IN, but:
+  //   - no NULL-poisoning (source_id is nullable; NOT IN with NULLs yields
+  //     UNKNOWN → empty result set, same bug as #32)
+  //   - uses the existing composite index on (source_type, source_id) for
+  //     the join (the earlier `source_id IS NOT NULL` predicate disabled it)
+  // Fixes #42.
+  const unembedded = await db.execute<{ id: number; finding: string; reasoning: string }>(sql`
+    SELECT f.id, f.finding, f.reasoning
+    FROM findings f
+    LEFT JOIN embeddings e
+      ON e.source_id = f.id AND e.source_type = 'finding'
+    WHERE e.id IS NULL
+    LIMIT ${embeddingBatchSize}
+  `);
+  const rows = (unembedded as unknown as { rows?: Array<{ id: number; finding: string; reasoning: string }> }).rows
+    ?? (Array.isArray(unembedded) ? (unembedded as Array<{ id: number; finding: string; reasoning: string }>) : []);
+  const unembeddedList = rows;
 
   let count = 0;
-  for (const f of unembedded) {
+  for (const f of unembeddedList) {
     try {
       const text = `${f.finding}\n\n${f.reasoning}`;
       const vector = await generateEmbedding(text);

@@ -8,6 +8,7 @@ import { ResearchSubsystem } from '@researcher/subsystems/research/index';
 import { DiscoverySubsystem } from '@researcher/subsystems/discovery/index';
 import { PaperSubsystem } from '@researcher/subsystems/paper/index';
 import { processAdminTasks } from '@researcher/core/admin-tasks';
+import { recoverStaleTasks, recoverStaleDownloads } from '@researcher/core/task-queue';
 import type { SubsystemContext } from '@researcher/core/subsystem';
 import { EventEmitter } from 'node:events';
 import { resolve } from 'node:path';
@@ -46,6 +47,11 @@ async function initialize(): Promise<ServerContext> {
 
   initDatabase(dbUrl);
   initEmbeddingConfig(config);
+
+  // Reset tasks/downloads stranded in transient states by a previous crash
+  // before any subsystem starts claiming new work (issue #15).
+  await recoverStaleTasks();
+  await recoverStaleDownloads();
 
   const db = getDb();
   const llm = new LLM(config.llm);

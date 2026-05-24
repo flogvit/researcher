@@ -1,15 +1,15 @@
 import { getDb } from '../db/connection';
 import { agentTasks, researchLog } from '../db/schema';
-import { eq, asc, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { LLM, createLLM } from '../llm/llm';
 import type { ProjectConfig } from '../config';
 import { Logger } from './logger';
+import { ADMIN_PREFIX, claimNextTask } from './task-queue';
 import { writeFile, readFile } from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const log = new Logger('admin');
-const ADMIN_PREFIX = 'admin:';
 
 interface CreateAgentPayload {
   name: string;
@@ -37,18 +37,8 @@ export async function processAdminTasks(config: ProjectConfig, projectDir: strin
   let processed = 0;
 
   while (true) {
-    const [task] = await db
-      .select()
-      .from(agentTasks)
-      .where(sql`${agentTasks.status} = 'pending' AND ${agentTasks.agentType} LIKE ${ADMIN_PREFIX + '%'}`)
-      .orderBy(asc(agentTasks.createdAt))
-      .limit(1);
-
+    const task = await claimNextTask('admin');
     if (!task) break;
-
-    await db.update(agentTasks)
-      .set({ status: 'in_progress', startedAt: new Date() })
-      .where(eq(agentTasks.id, task.id));
 
     try {
       const taskType = task.agentType.slice(ADMIN_PREFIX.length);

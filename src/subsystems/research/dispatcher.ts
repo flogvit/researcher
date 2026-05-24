@@ -6,6 +6,7 @@ import { eq, desc, sql, asc, and } from 'drizzle-orm';
 import { LLM, RateLimitError, createLLM } from '../../llm/llm';
 import { Logger } from '../../core/logger';
 import { loadPrompt, loadModuleConfig } from '../../core/prompt-loader';
+import { claimNextTask } from '../../core/task-queue';
 import { Triage } from './triage';
 import { Reviewer } from './reviewer';
 import { Reflector } from './reflector';
@@ -132,23 +133,15 @@ export class ResearchDispatcher {
   private async processOneTask(ctx: SubsystemContext, config: ModuleConfig): Promise<boolean> {
     const db = getDb();
 
-    // Pick oldest pending task
-    const [task] = await db
-      .select()
-      .from(agentTasks)
-      .where(eq(agentTasks.status, 'pending'))
-      .orderBy(asc(agentTasks.createdAt))
-      .limit(1);
-
+    // Atomically claim oldest pending non-admin task. Admin tasks live in the
+    // same agent_tasks table but use the 'admin:*' agent_type prefix; the
+    // research dispatcher must skip them so the web admin processor can
+    // handle them (issue #51).
+    const task = await claimNextTask('research');
     if (!task) return false;
 
     const taskDescription = (task.payload as Record<string, unknown>)?.description
       ?? (task.payload as Record<string, unknown>)?.task ?? 'unknown task';
-
-    // Mark in_progress
-    await db.update(agentTasks)
-      .set({ status: 'in_progress', startedAt: new Date() })
-      .where(eq(agentTasks.id, task.id));
 
     // Triage (skip for split children)
     const isSplitChild = (task.payload as Record<string, unknown>)?.fromSplit === true;

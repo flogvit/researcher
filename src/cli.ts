@@ -18,6 +18,7 @@ import { DiscoverySubsystem } from './subsystems/discovery/index';
 import { PaperSubsystem } from './subsystems/paper/index';
 import { Orchestrator } from './core/orchestrator';
 import { loadState, saveState } from './core/state';
+import { recoverStaleTasks, recoverStaleDownloads } from './core/task-queue';
 import type { SubsystemContext } from './core/subsystem';
 
 const program = new Command();
@@ -34,6 +35,10 @@ async function createContext(): Promise<{ ctx: SubsystemContext; cleanup: () => 
   const dbUrl = getDatabaseUrl(config);
   initDatabase(dbUrl);
   initEmbeddingConfig(config);
+
+  // Recover work left in transient states by a previous crash (#15).
+  await recoverStaleTasks();
+  await recoverStaleDownloads();
 
   const llm = new LLM({
     provider: config.llm.provider,

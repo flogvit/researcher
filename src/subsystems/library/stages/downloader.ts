@@ -1,29 +1,24 @@
 import { getDb } from '../../../db/connection';
 import { documents } from '../../../db/schema';
-import { eq, and, isNotNull, isNull } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import type { ModuleConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
+import { claimNextDownload } from '../../../core/task-queue';
 
 const DEFAULT_DOWNLOAD_DELAY = { minMs: 2000, maxMs: 5000 };
 
 /**
  * Process the next document waiting to be downloaded.
  * Returns true if a document was processed, false if nothing to do.
+ *
+ * The claim transitions status 'metadata' → 'downloading' atomically so two
+ * concurrent ticks never grab the same row (#14). A 'downloading' row that
+ * crashes is reset by recoverStaleDownloads at startup (#15).
  */
 export async function processNext(config?: ModuleConfig): Promise<boolean> {
   const db = getDb();
-
-  // Pick one document with status='metadata' that has a URL
-  const [item] = await db
-    .select({ id: documents.id, url: documents.url, title: documents.title })
-    .from(documents)
-    .where(and(
-      eq(documents.status, 'metadata'),
-      isNotNull(documents.url),
-    ))
-    .limit(1);
-
-  if (!item || !item.url) return false;
+  const item = await claimNextDownload();
+  if (!item) return false;
 
   try {
     const response = await fetch(item.url, {

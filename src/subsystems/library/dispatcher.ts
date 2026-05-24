@@ -102,14 +102,22 @@ export class LibraryDispatcher {
     await this.maybeRunSources(ctx, config);
     await this.maybeRunLocalSources(ctx);
 
-    // Process one item from each stage (priority: download first, embed last)
-    await downloader.processNext(config);
-    await extractor.processNext(config);
-    const llm = ctx.llm as LLM;
+    // Stages touch disjoint document statuses ('metadata' → 'downloading' →
+    // 'downloaded' → 'extracted' → 'classified' → 'embedded') and the
+    // claim queries use FOR UPDATE SKIP LOCKED (#14), so it's safe to run
+    // them in parallel within a tick. Quadruples per-tick throughput (#40).
+    const llm = ctx.llm;
+    const stages: Array<Promise<unknown>> = [
+      downloader.processNext(config),
+      extractor.processNext(config),
+      embedder.processNext(config),
+    ];
     if (!LLM.isCurrentlyRateLimited()) {
-      await classifier.processNext(llm, process.cwd(), config);
+      stages.push(classifier.processNext(llm, process.cwd(), config));
     }
-    await embedder.processNext(config);
+    await Promise.all(stages.map(p => p.catch(e => {
+      this.log.error(`Stage error: ${e instanceof Error ? e.message : String(e)}`);
+    })));
   }
 
   private async runSources(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {

@@ -2,6 +2,7 @@ import { getDb } from '../../../db/connection';
 import { documents, researchLog } from '../../../db/schema';
 import { sql } from 'drizzle-orm';
 import type { SourcePlugin, SourceFilters } from './types';
+import { isDuplicateByTitleOrUrl } from './dedupe';
 import type { ModuleConfig, DelayConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
 
@@ -43,18 +44,6 @@ function extractUrl(item: CrossRefItem): string | null {
 
 function stripHtml(text: string): string {
   return text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-async function isDuplicate(title: string, url: string | null): Promise<boolean> {
-  const db = getDb();
-  if (url) {
-    const [dup] = await db.select({ id: documents.id })
-      .from(documents).where(sql`${documents.url} = ${url}`).limit(1);
-    if (dup) return true;
-  }
-  const [dup] = await db.select({ id: documents.id })
-    .from(documents).where(sql`${documents.title} = ${title}`).limit(1);
-  return !!dup;
 }
 
 function buildCrossRefFilter(filters?: SourceFilters): string | null {
@@ -110,7 +99,7 @@ async function searchTerm(
       if (!title) continue;
 
       const articleUrl = extractUrl(item);
-      if (await isDuplicate(title, articleUrl)) continue;
+      if (await isDuplicateByTitleOrUrl(title, articleUrl)) continue;
 
       const authors = item.author
         ?.map(a => [a.given, a.family].filter(Boolean).join(' '))

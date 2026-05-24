@@ -2,6 +2,7 @@ import { getDb } from '../../../db/connection';
 import { documents, researchLog } from '../../../db/schema';
 import { sql } from 'drizzle-orm';
 import type { SourcePlugin, SourceFilters } from './types';
+import { isDuplicateByTitleOrUrl } from './dedupe';
 import type { ModuleConfig, DelayConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
 
@@ -15,18 +16,6 @@ import { randomDelay } from '../../../core/module-config';
 const API_BASE = 'https://api.semanticscholar.org/graph/v1/paper/search';
 const FIELDS = 'title,year,authors,abstract,url,openAccessPdf,publicationTypes,journal';
 const LIMIT = 100; // max per request
-
-async function isDuplicate(title: string, url: string | null): Promise<boolean> {
-  const db = getDb();
-  if (url) {
-    const [dup] = await db.select({ id: documents.id })
-      .from(documents).where(sql`${documents.url} = ${url}`).limit(1);
-    if (dup) return true;
-  }
-  const [dup] = await db.select({ id: documents.id })
-    .from(documents).where(sql`${documents.title} = ${title}`).limit(1);
-  return !!dup;
-}
 
 async function searchTerm(
   term: string,
@@ -97,7 +86,7 @@ async function searchTerm(
       const paperUrl = openAccessPdf?.url
         || paper.url as string | null;
 
-      if (await isDuplicate(title, paperUrl)) continue;
+      if (await isDuplicateByTitleOrUrl(title, paperUrl)) continue;
 
       const authors = (paper.authors as Array<{ name: string }>)?.map(a => a.name).join(', ') || null;
       const pubTypes = paper.publicationTypes as string[] | null;

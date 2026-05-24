@@ -2,6 +2,7 @@ import { getDb } from '../../../db/connection';
 import { documents, researchLog } from '../../../db/schema';
 import { sql } from 'drizzle-orm';
 import type { SourcePlugin } from './types';
+import { isDuplicateByTitleOrUrl } from './dedupe';
 import type { ModuleConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
 
@@ -25,18 +26,6 @@ interface DOAJArticle {
     link?: Array<{ url: string; type: string }>;
     keywords?: string[];
   };
-}
-
-async function isDuplicate(title: string, url: string | null): Promise<boolean> {
-  const db = getDb();
-  if (url) {
-    const [dup] = await db.select({ id: documents.id })
-      .from(documents).where(sql`${documents.url} = ${url}`).limit(1);
-    if (dup) return true;
-  }
-  const [dup] = await db.select({ id: documents.id })
-    .from(documents).where(sql`${documents.title} = ${title}`).limit(1);
-  return !!dup;
 }
 
 async function downloadTerm(term: string, moduleConfig?: ModuleConfig): Promise<{ added: number; total: number }> {
@@ -66,7 +55,7 @@ async function downloadTerm(term: string, moduleConfig?: ModuleConfig): Promise<
       const articleUrl = bib.link?.find(l => l.type === 'fulltext')?.url
         ?? bib.link?.[0]?.url ?? null;
 
-      if (await isDuplicate(bib.title, articleUrl)) continue;
+      if (await isDuplicateByTitleOrUrl(bib.title, articleUrl)) continue;
 
       await db.insert(documents).values({
         url: articleUrl,

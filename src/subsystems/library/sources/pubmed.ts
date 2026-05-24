@@ -2,6 +2,7 @@ import { getDb } from '../../../db/connection';
 import { documents, researchLog } from '../../../db/schema';
 import { sql } from 'drizzle-orm';
 import type { SourcePlugin, SourceFilters } from './types';
+import { isDuplicateByTitleOrUrl } from './dedupe';
 import type { ModuleConfig, DelayConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
 
@@ -22,18 +23,6 @@ interface PubMedArticle {
   sortdate: string;
   fulljournalname: string;
   elocationid?: string;
-}
-
-async function isDuplicate(title: string, url: string | null): Promise<boolean> {
-  const db = getDb();
-  if (url) {
-    const [dup] = await db.select({ id: documents.id })
-      .from(documents).where(sql`${documents.url} = ${url}`).limit(1);
-    if (dup) return true;
-  }
-  const [dup] = await db.select({ id: documents.id })
-    .from(documents).where(sql`${documents.title} = ${title}`).limit(1);
-  return !!dup;
 }
 
 function buildPubMedTerm(term: string, filters?: SourceFilters): string {
@@ -123,7 +112,7 @@ async function searchTerm(
       if (!article?.title) continue;
 
       const pubmedUrl = `https://pubmed.ncbi.nlm.nih.gov/${id}/`;
-      if (await isDuplicate(article.title, pubmedUrl)) continue;
+      if (await isDuplicateByTitleOrUrl(article.title, pubmedUrl)) continue;
 
       const authors = article.authors?.map(a => a.name).join(', ') || null;
       const year = article.sortdate ? parseInt(article.sortdate.split('/')[0]) : null;

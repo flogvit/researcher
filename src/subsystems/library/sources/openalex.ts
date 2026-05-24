@@ -2,6 +2,7 @@ import { getDb } from '../../../db/connection';
 import { documents, researchLog } from '../../../db/schema';
 import { sql } from 'drizzle-orm';
 import type { SourcePlugin, SourceFilters } from './types';
+import { isDuplicateByTitleOrUrl } from './dedupe';
 import type { ModuleConfig, DelayConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
 
@@ -44,18 +45,6 @@ function reconstructAbstract(invertedIndex: Record<string, number[]> | null): st
   }
   words.sort((a, b) => a[0] - b[0]);
   return words.map(w => w[1]).join(' ') || null;
-}
-
-async function isDuplicate(title: string, url: string | null): Promise<boolean> {
-  const db = getDb();
-  if (url) {
-    const [dup] = await db.select({ id: documents.id })
-      .from(documents).where(sql`${documents.url} = ${url}`).limit(1);
-    if (dup) return true;
-  }
-  const [dup] = await db.select({ id: documents.id })
-    .from(documents).where(sql`${documents.title} = ${title}`).limit(1);
-  return !!dup;
 }
 
 function buildOpenAlexFilter(filters?: SourceFilters): string | null {
@@ -112,7 +101,7 @@ async function searchTerm(
         ?? work.primary_location?.landing_page_url
         ?? null;
 
-      if (await isDuplicate(work.title, articleUrl)) continue;
+      if (await isDuplicateByTitleOrUrl(work.title, articleUrl)) continue;
 
       const authors = work.authorships.map(a => a.author.display_name).join(', ') || null;
       const abstract = reconstructAbstract(work.abstract_inverted_index);

@@ -164,32 +164,8 @@ export class Learner {
         continue;
       }
 
-      if (proposal.type === 'modify_prompt' && proposal.newContent) {
-        const result = await this.testProposal(proposal);
-        if (result) { applied++; } else { rejected++; }
-      } else if (proposal.type === 'add_agent' && proposal.newContent) {
-        const promptPath = resolve(this.projectDir, 'research', 'prompts', `${proposal.target}.md`);
-        assertWithinProject(promptPath, this.projectDir);
-        if (!existsSync(promptPath)) {
-          await atomicWrite(promptPath, proposal.newContent);
-          this.log.info(`Added new agent prompt: ${proposal.target}`);
-          applied++;
-        } else {
-          this.log.info(`Agent ${proposal.target} already exists, skipping`);
-          rejected++;
-        }
-      } else if (proposal.type === 'modify_config') {
-        this.log.info(`Config modification proposed: ${proposal.target} — ${proposal.description} (requires manual review)`);
-        await db.insert(researchLog).values({
-          eventType: 'learner_config_proposal',
-          agentType: 'learner',
-          details: { proposal: proposal.description, target: proposal.target, reasoning: proposal.reasoning },
-        });
-        rejected++; // Don't auto-apply config changes
-      } else {
-        this.log.info(`Skipping unsupported proposal: ${proposal.type} ${proposal.target}`);
-        rejected++;
-      }
+      const ok = await this.handleProposal(proposal);
+      if (ok) applied++; else rejected++;
     }
 
     // 6. Mark feedback as processed (#45 — single bulk UPDATE, not N round-trips)
@@ -212,6 +188,49 @@ export class Learner {
     });
 
     this.log.info(`Learning complete: ${applied} changes applied, ${rejected} rejected`);
+  }
+
+  /**
+   * Dispatch a proposal to its type-specific handler (#64). Each handler
+   * returns true on successful apply, false on rejection. Adding a new
+   * proposal type is a new private method + an entry in the switch.
+   */
+  private async handleProposal(proposal: Proposal): Promise<boolean> {
+    switch (proposal.type) {
+      case 'modify_prompt':
+        return proposal.newContent ? this.testProposal(proposal) : false;
+      case 'add_agent':
+        return proposal.newContent ? this.applyAddAgent(proposal) : false;
+      case 'modify_config':
+        return this.logConfigProposal(proposal);
+      default:
+        this.log.info(`Skipping unsupported proposal: ${proposal.type} ${proposal.target}`);
+        return false;
+    }
+  }
+
+  private async applyAddAgent(proposal: Proposal): Promise<boolean> {
+    if (!proposal.newContent) return false;
+    const promptPath = resolve(this.projectDir, 'research', 'prompts', `${proposal.target}.md`);
+    assertWithinProject(promptPath, this.projectDir);
+    if (existsSync(promptPath)) {
+      this.log.info(`Agent ${proposal.target} already exists, skipping`);
+      return false;
+    }
+    await atomicWrite(promptPath, proposal.newContent);
+    this.log.info(`Added new agent prompt: ${proposal.target}`);
+    return true;
+  }
+
+  private async logConfigProposal(proposal: Proposal): Promise<boolean> {
+    const db = getDb();
+    this.log.info(`Config modification proposed: ${proposal.target} — ${proposal.description} (requires manual review)`);
+    await db.insert(researchLog).values({
+      eventType: 'learner_config_proposal',
+      agentType: 'learner',
+      details: { proposal: proposal.description, target: proposal.target, reasoning: proposal.reasoning },
+    });
+    return false; // never auto-applied
   }
 
   /**

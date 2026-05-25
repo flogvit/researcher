@@ -3,11 +3,16 @@ import { getServerContext } from '@/lib/server-context';
 import { documents } from '@researcher/db/schema';
 import { desc, sql } from 'drizzle-orm';
 
-export async function GET() {
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 500;
+
+export async function GET(request: Request) {
   try {
     const { db } = await getServerContext();
+    const url = new URL(request.url);
+    const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(url.searchParams.get('limit') ?? String(DEFAULT_LIMIT), 10) || DEFAULT_LIMIT));
+    const offset = Math.max(0, parseInt(url.searchParams.get('offset') ?? '0', 10) || 0);
 
-    // Pipeline stats
     const statusCounts = await db
       .select({
         status: documents.status,
@@ -24,7 +29,7 @@ export async function GET() {
     }
     stats.total = total;
 
-    // Latest 100 documents (without heavy content fields)
+    // Pagination uses the documents_scouted_at_idx DESC index added in #37.
     const rows = await db
       .select({
         id: documents.id,
@@ -50,9 +55,10 @@ export async function GET() {
       })
       .from(documents)
       .orderBy(desc(documents.scoutedAt))
-      .limit(100);
+      .limit(limit)
+      .offset(offset);
 
-    return NextResponse.json({ stats, documents: rows });
+    return NextResponse.json({ stats, documents: rows, limit, offset, total });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: message }, { status: 500 });

@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePolling } from '@/lib/usePolling';
 
 interface Status {
   rateLimited: boolean;
@@ -31,25 +32,22 @@ export default function Dashboard() {
   const router = useRouter();
 
   useEffect(() => {
-    // Check if project is initialized
     fetch('/api/setup/status').then(r => r.json()).then(data => {
       if (!data.initialized) router.push('/setup');
     });
-
-    const load = async () => {
-      const [s, f, ss] = await Promise.all([
-        fetch('/api/status').then(r => r.json()).catch(() => null),
-        fetch('/api/findings').then(r => r.json()).catch(() => []),
-        fetch('/api/subsystems').then(r => r.json()).catch(() => []),
-      ]);
-      if (s) setStatus(s);
-      setFindings(f);
-      setSubsystems(ss);
-    };
-    load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
   }, [router]);
+
+  // Pauses while the tab is hidden (#48).
+  usePolling(async () => {
+    const [s, f, ss] = await Promise.all([
+      fetch('/api/status').then(r => r.json()).catch(() => null),
+      fetch('/api/findings').then(r => r.json()).catch(() => []),
+      fetch('/api/subsystems').then(r => r.json()).catch(() => []),
+    ]);
+    if (s) setStatus(s);
+    setFindings(f);
+    setSubsystems(ss);
+  }, 5000);
 
   if (!status) return <p>Loading...</p>;
 

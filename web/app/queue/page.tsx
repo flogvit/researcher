@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { usePolling } from '@/lib/usePolling';
 
 interface AdminTask {
   id: number;
@@ -15,12 +16,7 @@ interface AdminTask {
 export default function QueuePage() {
   const [tasks, setTasks] = useState<AdminTask[]>([]);
 
-  useEffect(() => {
-    const load = () => fetch('/api/admin/tasks').then(r => r.json()).then(setTasks);
-    load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  usePolling(() => fetch('/api/admin/tasks').then(r => r.json()).then(setTasks), 5000);
 
   return (
     <div>

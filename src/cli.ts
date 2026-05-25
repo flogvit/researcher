@@ -19,7 +19,8 @@ import { PaperSubsystem } from './subsystems/paper/index';
 import { Orchestrator } from './core/orchestrator';
 import { loadState, saveState } from './core/state';
 import { recoverStaleTasks, recoverStaleDownloads } from './core/task-queue';
-import type { SubsystemContext } from './core/subsystem';
+import type { SubsystemContext, SubsystemStatus } from './core/subsystem';
+import { registerSubsystemCommands } from './cli-subsystem';
 
 const program = new Command();
 
@@ -239,81 +240,36 @@ const library = program
   .command('library')
   .description('Library pipeline management');
 
-library
-  .command('start')
-  .description('Run library pipeline continuously')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const lib = new LibrarySubsystem();
-
-    const shutdown = async () => {
-      console.log('\nShutting down library...');
-      await lib.stop();
-      await cleanup();
-      process.exit(0);
-    };
-
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
-
-    console.log('Starting library pipeline...');
-    await lib.start(ctx);
-    await cleanup();
-  });
-
-library
-  .command('update')
-  .description('Run library pipeline once')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const lib = new LibrarySubsystem();
-
-    console.log('Running library update...');
-    await lib.update(ctx);
-    await cleanup();
-    console.log('Library update complete.');
-  });
-
-library
-  .command('status')
-  .description('Show documents per pipeline stage')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const lib = new LibrarySubsystem();
-
-    const status = await lib.status();
-
+registerSubsystemCommands(library, {
+  name: 'library',
+  label: 'Library',
+  createContext,
+  subsystem: () => new LibrarySubsystem(),
+  descriptions: {
+    update: 'Run library pipeline once',
+    status: 'Show documents per pipeline stage',
+  },
+  formatStatus: (status: SubsystemStatus) => {
     console.log(`\nLibrary Status: ${status.state}`);
     console.log('─'.repeat(40));
-
     const stats = status.stats;
     const total = stats.total ?? 0;
-
-    // Pipeline stages in order
     const stages = [
       'metadata', 'downloaded', 'extracted', 'classified', 'embedded',
       'failed_download', 'failed_extract', 'failed_classify', 'failed_embed',
     ];
-
     for (const stage of stages) {
-      if (stats[stage] !== undefined) {
-        const count = stats[stage];
-        console.log(`  ${stage.padEnd(20)} ${count}`);
-      }
+      if (stats[stage] !== undefined) console.log(`  ${stage.padEnd(20)} ${stats[stage]}`);
     }
-
-    // Show any stages not in our list
     for (const [key, value] of Object.entries(stats)) {
       if (key !== 'total' && !stages.includes(key)) {
         console.log(`  ${key.padEnd(20)} ${value}`);
       }
     }
-
     console.log('─'.repeat(40));
     console.log(`  ${'total'.padEnd(20)} ${total}`);
-
-    await cleanup();
-  });
+  },
+});
 
 library
   .command('retry')
@@ -359,61 +315,16 @@ const research = program
   .command('research')
   .description('Research pipeline management');
 
-research
-  .command('start')
-  .description('Run research pipeline continuously')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const res = new ResearchSubsystem();
-
-    const shutdown = async () => {
-      console.log('\nShutting down research...');
-      await res.stop();
-      await cleanup();
-      process.exit(0);
-    };
-
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
-
-    console.log('Starting research pipeline...');
-    await res.start(ctx);
-    await cleanup();
-  });
-
-research
-  .command('update')
-  .description('Run one research cycle')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const res = new ResearchSubsystem();
-
-    console.log('Running research update...');
-    await res.update(ctx);
-    await cleanup();
-    console.log('Research update complete.');
-  });
-
-research
-  .command('status')
-  .description('Show task queue and findings count')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const res = new ResearchSubsystem();
-
-    const status = await res.status();
-
-    console.log(`\nResearch Status: ${status.state}`);
-    console.log('─'.repeat(40));
-    for (const [key, value] of Object.entries(status.stats)) {
-      console.log(`  ${String(key).padEnd(20)} ${value}`);
-    }
-    if (status.error) {
-      console.log(`  ERROR: ${status.error}`);
-    }
-
-    await cleanup();
-  });
+registerSubsystemCommands(research, {
+  name: 'research',
+  label: 'Research',
+  createContext,
+  subsystem: () => new ResearchSubsystem(),
+  descriptions: {
+    update: 'Run one research cycle',
+    status: 'Show task queue and findings count',
+  },
+});
 
 // ─── discovery ────────────────────────────────────────────────────────────────
 
@@ -421,61 +332,16 @@ const discovery = program
   .command('discovery')
   .description('Discovery pipeline management');
 
-discovery
-  .command('start')
-  .description('Run discovery pipeline continuously')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const disc = new DiscoverySubsystem();
-
-    const shutdown = async () => {
-      console.log('\nShutting down discovery...');
-      await disc.stop();
-      await cleanup();
-      process.exit(0);
-    };
-
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
-
-    console.log('Starting discovery pipeline...');
-    await disc.start(ctx);
-    await cleanup();
-  });
-
-discovery
-  .command('update')
-  .description('Run one discovery pass')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const disc = new DiscoverySubsystem();
-
-    console.log('Running discovery update...');
-    await disc.update(ctx);
-    await cleanup();
-    console.log('Discovery update complete.');
-  });
-
-discovery
-  .command('status')
-  .description('Show discovery counts by status')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const disc = new DiscoverySubsystem();
-
-    const status = await disc.status();
-
-    console.log(`\nDiscovery Status: ${status.state}`);
-    console.log('─'.repeat(40));
-    for (const [key, value] of Object.entries(status.stats)) {
-      console.log(`  ${String(key).padEnd(20)} ${value}`);
-    }
-    if (status.error) {
-      console.log(`  ERROR: ${status.error}`);
-    }
-
-    await cleanup();
-  });
+registerSubsystemCommands(discovery, {
+  name: 'discovery',
+  label: 'Discovery',
+  createContext,
+  subsystem: () => new DiscoverySubsystem(),
+  descriptions: {
+    update: 'Run one discovery pass',
+    status: 'Show discovery counts by status',
+  },
+});
 
 // ─── paper ────────────────────────────────────────────────────────────────────
 
@@ -483,61 +349,16 @@ const paper = program
   .command('paper')
   .description('Paper pipeline management');
 
-paper
-  .command('start')
-  .description('Run paper pipeline continuously')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const pap = new PaperSubsystem();
-
-    const shutdown = async () => {
-      console.log('\nShutting down paper...');
-      await pap.stop();
-      await cleanup();
-      process.exit(0);
-    };
-
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
-
-    console.log('Starting paper pipeline...');
-    await pap.start(ctx);
-    await cleanup();
-  });
-
-paper
-  .command('update')
-  .description('Run one paper pass')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const pap = new PaperSubsystem();
-
-    console.log('Running paper update...');
-    await pap.update(ctx);
-    await cleanup();
-    console.log('Paper update complete.');
-  });
-
-paper
-  .command('status')
-  .description('Show paper counts by status')
-  .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const pap = new PaperSubsystem();
-
-    const status = await pap.status();
-
-    console.log(`\nPaper Status: ${status.state}`);
-    console.log('─'.repeat(40));
-    for (const [key, value] of Object.entries(status.stats)) {
-      console.log(`  ${String(key).padEnd(20)} ${value}`);
-    }
-    if (status.error) {
-      console.log(`  ERROR: ${status.error}`);
-    }
-
-    await cleanup();
-  });
+registerSubsystemCommands(paper, {
+  name: 'paper',
+  label: 'Paper',
+  createContext,
+  subsystem: () => new PaperSubsystem(),
+  descriptions: {
+    update: 'Run one paper pass',
+    status: 'Show paper counts by status',
+  },
+});
 
 // ─── focus ───────────────────────────────────────────────────────────────────
 

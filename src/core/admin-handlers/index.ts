@@ -6,6 +6,7 @@ import { modifyPrompt } from './modify-prompt';
 import { deleteAgent } from './delete-agent';
 import { runLearner } from './run-learner';
 import { bootstrapProjectHandler } from './bootstrap-project';
+import { deriverProcessTurnHandler } from './deriver-process-turn';
 
 const all: AdminHandler[] = [
   createAgent,
@@ -15,6 +16,7 @@ const all: AdminHandler[] = [
   deleteAgent,
   runLearner,
   bootstrapProjectHandler,
+  deriverProcessTurnHandler,
 ];
 
 const byType = new Map<string, AdminHandler>(all.map(h => [h.type, h]));

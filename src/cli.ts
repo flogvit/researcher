@@ -22,6 +22,7 @@ import { recoverStaleTasks, recoverStaleDownloads } from './core/task-queue';
 import type { SubsystemContext, SubsystemStatus } from './core/subsystem';
 import { registerSubsystemCommands } from './cli-subsystem';
 import { writeBootstrapResult, buildConfigFromBootstrap, setupProjectDatabase } from './init/write-bootstrap';
+import { registerChatCommand } from './commands/chat';
 
 const program = new Command();
 
@@ -731,6 +732,10 @@ project
     console.log(`Project [${id}] "${updated.title}" is now paused.`);
     await cleanup();
   });
+
+// ─── chat ────────────────────────────────────────────────────────────────────
+
+registerChatCommand(program);
 
 // ─── Run ──────────────────────────────────────────────────────────────────────
 

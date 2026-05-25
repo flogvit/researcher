@@ -55,6 +55,15 @@ export interface ProjectConfig {
   web?: {
     port?: number;
   };
+  /** Chat foundation (Fase 1 #85). */
+  chat?: {
+    /** Default true — project-scoped queries merge global conclusions in too. */
+    globalUserModel?: boolean;
+    /** 'project-only' opts a project out of the global merge. */
+    scopeOverride?: 'project-only' | null;
+    /** Compression trigger: max chars in session before summarizing earlier turns (#86). */
+    compressionCharBudget?: number;
+  };
 }
 
 export async function loadConfig(projectDir: string): Promise<ProjectConfig> {

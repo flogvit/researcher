@@ -9,6 +9,7 @@ describe('admin handler registry', () => {
       'bootstrap_project',
       'create_agent',
       'delete_agent',
+      'deriver_process_turn',
       'modify_config',
       'modify_prompt',
       'modify_researcher_config',

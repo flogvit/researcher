@@ -190,3 +190,58 @@ export const reviewFeedback = pgTable('review_feedback', {
 }, (table) => [
   index('review_feedback_processed_idx').on(table.processedByLearner),
 ]);
+
+// ─── Chat Foundation (Fase 1, #77) ──────────────────────────────────────────
+
+export const chatSessions = pgTable('chat_sessions', {
+  id: serial('id').primaryKey(),
+  scope: varchar('scope', { length: 100 }).notNull().default('global'),
+  title: text('title'),
+  startedAt: timestamp('started_at').notNull().defaultNow(),
+  lastTurnAt: timestamp('last_turn_at').notNull().defaultNow(),
+}, (table) => [
+  index('chat_sessions_scope_idx').on(table.scope),
+  index('chat_sessions_last_turn_idx').on(table.lastTurnAt.desc()),
+]);
+
+export const chatMessages = pgTable('chat_messages', {
+  id: serial('id').primaryKey(),
+  sessionId: integer('session_id').notNull().references(() => chatSessions.id, { onDelete: 'cascade' }),
+  role: varchar('role', { length: 20 }).notNull(),
+  content: text('content').notNull(),
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (table) => [
+  index('chat_messages_session_idx').on(table.sessionId, table.createdAt),
+]);
+
+export const peerConclusions = pgTable('peer_conclusions', {
+  id: serial('id').primaryKey(),
+  scope: varchar('scope', { length: 100 }).notNull().default('global'),
+  topic: varchar('topic', { length: 50 }).notNull(),
+  claim: text('claim').notNull(),
+  evidence: jsonb('evidence'),
+  embedding: vector('embedding', { dimensions: 768 }),
+  confidence: integer('confidence').notNull().default(50), // 0-100 (stored as int to keep schema simple)
+  supersedes: integer('supersedes'),
+  active: boolean('active').notNull().default(true),
+  sourceSessionId: integer('source_session_id').references(() => chatSessions.id, { onDelete: 'set null' }),
+  sourceMessageId: integer('source_message_id').references(() => chatMessages.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (table) => [
+  index('peer_conclusions_active_idx').on(table.scope, table.active),
+  index('peer_conclusions_topic_idx').on(table.topic),
+  index('peer_conclusions_vec_idx').using('ivfflat', table.embedding.op('vector_cosine_ops')),
+]);
+
+export const notificationSubscriptions = pgTable('notification_subscriptions', {
+  id: serial('id').primaryKey(),
+  channel: varchar('channel', { length: 50 }).notNull(),
+  config: jsonb('config').notNull(),
+  filters: jsonb('filters'),
+  enabled: boolean('enabled').notNull().default(true),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (table) => [
+  index('notification_subscriptions_enabled_idx').on(table.enabled),
+]);

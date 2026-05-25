@@ -16,7 +16,7 @@ import { LibrarySubsystem } from './subsystems/library/index';
 import { ResearchSubsystem } from './subsystems/research/index';
 import { DiscoverySubsystem } from './subsystems/discovery/index';
 import { PaperSubsystem } from './subsystems/paper/index';
-import { Orchestrator } from './core/orchestrator';
+import { SubsystemManager } from './core/subsystem-manager';
 import { loadState, saveState } from './core/state';
 import { recoverStaleTasks, recoverStaleDownloads } from './core/task-queue';
 import type { SubsystemContext, SubsystemStatus } from './core/subsystem';
@@ -475,14 +475,14 @@ program
   .command('status')
   .description('Show status of all subsystems')
   .action(async () => {
-    const { ctx, cleanup } = await createContext();
-    const orchestrator = new Orchestrator();
-    orchestrator.register(new LibrarySubsystem());
-    orchestrator.register(new ResearchSubsystem());
-    orchestrator.register(new DiscoverySubsystem());
-    orchestrator.register(new PaperSubsystem());
+    const { cleanup } = await createContext();
+    const manager = new SubsystemManager();
+    manager.register(new LibrarySubsystem());
+    manager.register(new ResearchSubsystem());
+    manager.register(new DiscoverySubsystem());
+    manager.register(new PaperSubsystem());
 
-    const statuses = await orchestrator.statusAll();
+    const statuses = await manager.statusAll();
 
     console.log('\nResearcher Status');
     console.log('═'.repeat(50));

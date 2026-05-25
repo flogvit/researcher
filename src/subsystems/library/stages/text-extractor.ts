@@ -27,11 +27,18 @@ function stripHTML(html: string): string {
 }
 
 async function extractPDF(base64Content: string): Promise<string | null> {
+  // Run pdf-parse in a subprocess so a large/malformed PDF can't block
+  // the main event loop (which also serves Next.js admin polling). The
+  // worker reads base64 from stdin and writes extracted text to stdout (#46).
   try {
-    const pdfParse = (await import('pdf-parse')).default;
-    const buffer = Buffer.from(base64Content, 'base64');
-    const result = await pdfParse(buffer);
-    return result.text?.trim() || null;
+    const { spawnWithTimeout } = await import('../../../llm/llm');
+    const workerPath = new URL('./pdf-worker.ts', import.meta.url).pathname;
+    const { stdout, exitCode, timedOut } = await spawnWithTimeout(
+      ['bun', workerPath],
+      { stdin: new Response(base64Content), timeoutMs: 5 * 60_000 },
+    );
+    if (timedOut || exitCode !== 0) return null;
+    return stdout.trim() || null;
   } catch {
     return null;
   }

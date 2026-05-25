@@ -33,7 +33,8 @@ program
 // ─── Helper: create context from researcher.json ─────────────────────────────
 
 async function createContext(): Promise<{ ctx: SubsystemContext; cleanup: () => Promise<void> }> {
-  const config = await loadConfig(process.cwd());
+  const projectDir = process.cwd();
+  const config = await loadConfig(projectDir);
   const dbUrl = getDatabaseUrl(config);
   initDatabase(dbUrl);
   initEmbeddingConfig(config);
@@ -51,6 +52,7 @@ async function createContext(): Promise<{ ctx: SubsystemContext; cleanup: () => 
 
   const ctx: SubsystemContext = {
     config,
+    projectDir,
     db: getDb(),
     llm,
     isReady: () => true,

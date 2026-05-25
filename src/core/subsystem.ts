@@ -15,6 +15,10 @@ export interface SubsystemStatus {
 
 export interface SubsystemContext {
   config: ProjectConfig;
+  /** Absolute path to the researcher project root. Subsystems should use
+   * this instead of process.cwd() so they can be tested or hosted in a
+   * process where cwd isn't the project (#60). */
+  projectDir: string;
   db: ReturnType<typeof getDb>;
   llm: LLM;
   isReady(subsystemName: string): boolean;

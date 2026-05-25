@@ -38,11 +38,9 @@ function findProjectDir(): string {
 async function initialize(): Promise<ServerContext> {
   const projectDir = findProjectDir();
 
-  // Change working directory so subsystems using process.cwd() find the project
-  if (process.cwd() !== projectDir) {
-    process.chdir(projectDir);
-  }
-
+  // Historic: we used to process.chdir(projectDir) here because subsystems
+  // relied on process.cwd(). Now SubsystemContext carries projectDir
+  // explicitly (#60); chdir is no longer required.
   const config = await loadConfig(projectDir);
   const dbUrl = getDatabaseUrl(config);
 
@@ -66,6 +64,7 @@ async function initialize(): Promise<ServerContext> {
 
   const ctx: SubsystemContext = {
     config,
+    projectDir,
     db,
     llm,
     isReady(name: string) {

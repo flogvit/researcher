@@ -32,9 +32,12 @@ export abstract class BaseDispatcher {
     this.log = new Logger(moduleName);
   }
 
-  protected async getModuleConfig(): Promise<ModuleConfig> {
+  protected projectDirHint: string | null = null;
+
+  protected async getModuleConfig(ctx?: SubsystemContext): Promise<ModuleConfig> {
     if (!this.moduleConfig) {
-      this.moduleConfig = await loadModuleConfig(process.cwd(), this.moduleName);
+      const projectDir = ctx?.projectDir ?? this.projectDirHint ?? process.cwd();
+      this.moduleConfig = await loadModuleConfig(projectDir, this.moduleName);
     }
     return this.moduleConfig;
   }
@@ -43,7 +46,8 @@ export abstract class BaseDispatcher {
 
   async start(ctx: SubsystemContext): Promise<void> {
     this.running = true;
-    const config = await this.getModuleConfig();
+    this.projectDirHint = ctx.projectDir;
+    const config = await this.getModuleConfig(ctx);
     const tickInterval = config.tickInterval ?? this.defaultTickInterval;
     this.log.info(`${this.moduleName} dispatcher started`);
 

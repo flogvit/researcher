@@ -6,21 +6,43 @@ import { Logger } from '../core/logger';
 
 const log = new Logger('embeddings');
 
-let embeddingBaseUrl = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
-let embeddingModel = 'nomic-embed-text';
-let embeddingBatchSize = 10;
+/**
+ * Embeddings config is a singleton — there is one Ollama instance per
+ * researcher process and the model rarely changes. Previously this was
+ * three top-level `let`s mutated by initEmbeddingConfig with order-
+ * sensitive defaults. Wrapping in a frozen object makes the lifecycle
+ * explicit: throw if generateEmbedding is called before init (#74).
+ */
+interface EmbeddingState {
+  baseUrl: string;
+  model: string;
+  batchSize: number;
+}
+
+let state: EmbeddingState | null = null;
+
+function requireState(): EmbeddingState {
+  if (!state) {
+    throw new Error('Embeddings not initialized — call initEmbeddingConfig(config) first.');
+  }
+  return state;
+}
 
 export function initEmbeddingConfig(config: ProjectConfig): void {
-  embeddingBaseUrl = config.embedding?.baseUrl ?? config.llm.baseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
-  embeddingModel = config.embedding?.model ?? 'nomic-embed-text';
+  state = {
+    baseUrl: config.embedding?.baseUrl ?? config.llm.baseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434',
+    model: config.embedding?.model ?? 'nomic-embed-text',
+    batchSize: 10,
+  };
 }
 
 export async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await fetch(`${embeddingBaseUrl}/api/embed`, {
+  const { baseUrl, model } = requireState();
+  const response = await fetch(`${baseUrl}/api/embed`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: embeddingModel,
+      model,
       input: text,
     }),
   });
@@ -35,6 +57,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 
 export async function embedFindings(): Promise<number> {
   const db = getDb();
+  const { batchSize } = requireState();
 
   // LEFT JOIN ... WHERE NULL — same set as the previous NOT IN, but:
   //   - no NULL-poisoning (source_id is nullable; NOT IN with NULLs yields
@@ -48,7 +71,7 @@ export async function embedFindings(): Promise<number> {
     LEFT JOIN embeddings e
       ON e.source_id = f.id AND e.source_type = 'finding'
     WHERE e.id IS NULL
-    LIMIT ${embeddingBatchSize}
+    LIMIT ${batchSize}
   `);
   const rows = (unembedded as unknown as { rows?: Array<{ id: number; finding: string; reasoning: string }> }).rows
     ?? (Array.isArray(unembedded) ? (unembedded as Array<{ id: number; finding: string; reasoning: string }>) : []);

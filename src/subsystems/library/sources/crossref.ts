@@ -156,14 +156,12 @@ export const crossrefSource: SourcePlugin = {
 
     log.info(`CrossRef source: ${searchTerms.length} search terms`);
 
+    const { mapWithConcurrency } = await import('../../../core/concurrency');
+    const concurrency = (moduleConfig?.sourceConcurrency as number | undefined) ?? 3;
+    const results = await mapWithConcurrency(searchTerms, concurrency, t => searchTerm(t, mailto, filters, moduleConfig?.fetchDelay));
     let totalAdded = 0;
     let grandTotal = 0;
-
-    for (const term of searchTerms) {
-      const result = await searchTerm(term, mailto, filters, moduleConfig?.fetchDelay);
-      totalAdded += result.added;
-      grandTotal += result.total;
-    }
+    for (const r of results) { totalAdded += r.added; grandTotal += r.total; }
 
     await db.insert(researchLog).values({
       eventType: 'source_download_complete',

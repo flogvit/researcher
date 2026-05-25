@@ -100,14 +100,14 @@ export const doajSource: SourcePlugin = {
 
     log.info(`DOAJ source: ${searchTerms.length} search terms`);
 
+    // Bounded parallelism over searchTerms (#44). DOAJ doesn't publish a
+    // tight rate limit; 3 concurrent terms keeps the API happy.
+    const { mapWithConcurrency } = await import('../../../core/concurrency');
+    const concurrency = (moduleConfig?.sourceConcurrency as number | undefined) ?? 3;
+    const results = await mapWithConcurrency(searchTerms, concurrency, t => downloadTerm(t, moduleConfig));
     let totalAdded = 0;
     let grandTotal = 0;
-
-    for (const term of searchTerms) {
-      const result = await downloadTerm(term, moduleConfig);
-      totalAdded += result.added;
-      grandTotal += result.total;
-    }
+    for (const r of results) { totalAdded += r.added; grandTotal += r.total; }
 
     await db.insert(researchLog).values({
       eventType: 'source_download_complete',

@@ -169,14 +169,14 @@ export const arxivSource: SourcePlugin = {
 
     log.info(`arXiv source: ${searchTerms.length} search terms`);
 
+    // arXiv requires <=1 request per 3 seconds (#44 conservative). Stays
+    // sequential by default; configurable via moduleConfig.sourceConcurrency.
+    const { mapWithConcurrency } = await import('../../../core/concurrency');
+    const concurrency = (moduleConfig?.sourceConcurrency as number | undefined) ?? 1;
+    const results = await mapWithConcurrency(searchTerms, concurrency, t => searchTerm(t, filters, moduleConfig?.fetchDelay));
     let totalAdded = 0;
     let grandTotal = 0;
-
-    for (const term of searchTerms) {
-      const result = await searchTerm(term, filters, moduleConfig?.fetchDelay);
-      totalAdded += result.added;
-      grandTotal += result.total;
-    }
+    for (const r of results) { totalAdded += r.added; grandTotal += r.total; }
 
     await db.insert(researchLog).values({
       eventType: 'source_download_complete',

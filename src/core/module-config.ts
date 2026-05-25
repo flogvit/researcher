@@ -33,6 +33,8 @@ export interface ModuleConfig {
   dependencyPollInterval?: number;
   embeddingModel?: string;
   embeddingBatchSize?: number;
+  /** Per-source maximum concurrent search-term workers (#44). Defaults vary per plugin. */
+  sourceConcurrency?: number;
 }
 
 export function randomDelay(config?: DelayConfig): Promise<void> {

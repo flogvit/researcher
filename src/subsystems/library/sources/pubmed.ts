@@ -166,14 +166,14 @@ export const pubmedSource: SourcePlugin = {
 
     log.info(`PubMed source: ${searchTerms.length} search terms`);
 
+    const { mapWithConcurrency } = await import('../../../core/concurrency');
+    // PubMed allows 3 req/s no-key or 10 req/s with API key. Stay conservative.
+    const defaultC = apiKey ? 3 : 2;
+    const concurrency = (moduleConfig?.sourceConcurrency as number | undefined) ?? defaultC;
+    const results = await mapWithConcurrency(searchTerms, concurrency, t => searchTerm(t, apiKey, filters, moduleConfig?.fetchDelay));
     let totalAdded = 0;
     let grandTotal = 0;
-
-    for (const term of searchTerms) {
-      const result = await searchTerm(term, apiKey, filters, moduleConfig?.fetchDelay);
-      totalAdded += result.added;
-      grandTotal += result.total;
-    }
+    for (const r of results) { totalAdded += r.added; grandTotal += r.total; }
 
     await db.insert(researchLog).values({
       eventType: 'source_download_complete',

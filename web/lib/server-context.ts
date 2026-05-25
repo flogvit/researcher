@@ -9,6 +9,7 @@ import { DiscoverySubsystem } from '@researcher/subsystems/discovery/index';
 import { PaperSubsystem } from '@researcher/subsystems/paper/index';
 import { processAdminTasks } from '@researcher/core/admin-tasks';
 import { recoverStaleTasks, recoverStaleDownloads } from '@researcher/core/task-queue';
+import { startNotificationListener } from '@researcher/subsystems/notifications/dispatcher';
 import type { SubsystemContext } from '@researcher/core/subsystem';
 import { EventEmitter } from 'node:events';
 import { resolve } from 'node:path';
@@ -77,6 +78,9 @@ async function initialize(): Promise<ServerContext> {
       emitter.on(event, handler);
     },
   };
+
+  // Start notification listener so emit'd BusEvents reach configured channels (#91).
+  startNotificationListener(config);
 
   // Start admin queue processor.
   //

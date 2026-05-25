@@ -33,11 +33,24 @@ export interface Turn {
   assistantMessage: string;
 }
 
+export interface TurnResult {
+  assistant: string;
+  usedConclusions: number;
+  intent?: 'sparring' | 'brief' | 'fortolker';
+  action?: {
+    proposalId: number;
+    taskType: string;
+    riskLevel: 'low' | 'medium' | 'high';
+    status: string;
+    rationale: string;
+  } | null;
+}
+
 export async function handleTurn(
   config: ProjectConfig,
   sessionId: number,
   userMessage: string,
-): Promise<{ assistant: string; usedConclusions: number }> {
+): Promise<TurnResult> {
   const db = getDb();
 
   const [session] = await db.select().from(chatSessions).where(eq(chatSessions.id, sessionId)).limit(1);
@@ -103,6 +116,22 @@ export async function handleTurn(
     .set({ lastTurnAt: new Date() })
     .where(eq(chatSessions.id, sessionId));
 
+  // Intent + action routing (Fase 2 #87, #88). Best-effort: failures don't
+  // affect the user-facing assistant response.
+  let intent: 'sparring' | 'brief' | 'fortolker' | undefined;
+  let action: TurnResult['action'] = null;
+  try {
+    const { classifyIntent } = await import('./intent-router');
+    const classification = await classifyIntent(config, userMessage);
+    intent = classification.intent;
+    if (classification.intent === 'brief' && classification.confidence > 0.6) {
+      const { executeAction } = await import('./action-executor');
+      action = await executeAction(config, userMessage, session.scope);
+    }
+  } catch (e) {
+    log.warn(`intent/action routing failed: ${e instanceof Error ? e.message : e}`);
+  }
+
   // Fire-and-forget observation
   void userModel.observe({
     sessionId,
@@ -111,7 +140,7 @@ export async function handleTurn(
     scope,
   }).catch(e => log.warn(`observe failed: ${e instanceof Error ? e.message : e}`));
 
-  return { assistant: assistantText, usedConclusions };
+  return { assistant: assistantText, usedConclusions, intent, action };
 }
 
 /**

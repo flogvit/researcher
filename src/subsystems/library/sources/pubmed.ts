@@ -3,6 +3,9 @@ import { documents, researchLog } from '../../../db/schema';
 import { sql } from 'drizzle-orm';
 import type { SourcePlugin, SourceFilters } from './types';
 import { isDuplicateByTitleOrUrl } from './dedupe';
+import { Logger } from '../../../core/logger';
+
+const log = new Logger('source:pubmed');
 import type { ModuleConfig, DelayConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
 
@@ -142,7 +145,7 @@ async function searchTerm(
   }
 
   if (added > 0) {
-    console.log(`  PubMed "${term}" — ${total} total, ${added} new`);
+    log.info(`  PubMed "${term}" — ${total} total, ${added} new`);
   }
 
   return { added, total };
@@ -161,7 +164,7 @@ export const pubmedSource: SourcePlugin = {
       throw new Error('PubMed source requires settings.searchTerms to be a non-empty array');
     }
 
-    console.log(`PubMed source: ${searchTerms.length} search terms`);
+    log.info(`PubMed source: ${searchTerms.length} search terms`);
 
     let totalAdded = 0;
     let grandTotal = 0;
@@ -183,7 +186,7 @@ export const pubmedSource: SourcePlugin = {
       },
     });
 
-    console.log(`PubMed source done: ${totalAdded} new articles.`);
+    log.info(`PubMed source done: ${totalAdded} new articles.`);
 
     return { added: totalAdded, total: grandTotal };
   },

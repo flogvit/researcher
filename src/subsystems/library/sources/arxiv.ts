@@ -3,6 +3,9 @@ import { documents, researchLog } from '../../../db/schema';
 import { sql } from 'drizzle-orm';
 import type { SourcePlugin, SourceFilters } from './types';
 import { isDuplicateByTitleOrUrl } from './dedupe';
+import { Logger } from '../../../core/logger';
+
+const log = new Logger('source:arxiv');
 import type { ModuleConfig, DelayConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
 
@@ -146,7 +149,7 @@ async function searchTerm(
   }
 
   if (added > 0) {
-    console.log(`  arXiv "${term}" — ${total} total, ${added} new`);
+    log.info(`  arXiv "${term}" — ${total} total, ${added} new`);
   }
 
   return { added, total };
@@ -164,7 +167,7 @@ export const arxivSource: SourcePlugin = {
       throw new Error('arXiv source requires settings.searchTerms to be a non-empty array');
     }
 
-    console.log(`arXiv source: ${searchTerms.length} search terms`);
+    log.info(`arXiv source: ${searchTerms.length} search terms`);
 
     let totalAdded = 0;
     let grandTotal = 0;
@@ -186,7 +189,7 @@ export const arxivSource: SourcePlugin = {
       },
     });
 
-    console.log(`arXiv source done: ${totalAdded} new articles.`);
+    log.info(`arXiv source done: ${totalAdded} new articles.`);
 
     return { added: totalAdded, total: grandTotal };
   },

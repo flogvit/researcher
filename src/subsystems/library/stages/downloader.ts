@@ -5,6 +5,9 @@ import type { ModuleConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
 import { claimNextDownload } from '../../../core/task-queue';
 import { safeFetch, SsrfError, ResponseTooLargeError } from '../../../core/safe-fetch';
+import { Logger } from '../../../core/logger';
+
+const log = new Logger('downloader');
 
 const DEFAULT_DOWNLOAD_DELAY = { minMs: 2000, maxMs: 5000 };
 
@@ -66,7 +69,7 @@ export async function processNext(config?: ModuleConfig): Promise<boolean> {
         .where(eq(documents.id, item.id));
     }
 
-    console.log(`  Downloaded: ${item.title.slice(0, 60)}`);
+    log.info(`Downloaded: ${item.title.slice(0, 60)}`);
   } catch (e) {
     // SSRF rejection and oversize bodies land here and the document gets
     // marked failed_download with the rejection reason as raw_content.

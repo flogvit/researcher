@@ -3,7 +3,9 @@ import { documents, embeddings } from '../../../db/schema';
 import { eq } from 'drizzle-orm';
 import { generateEmbedding } from '../../../llm/embeddings';
 import type { ModuleConfig } from '../../../core/module-config';
+import { Logger } from '../../../core/logger';
 
+const log = new Logger('embedder');
 const EXPECTED_EMBEDDING_DIM = 768; // matches schema vector(768) / nomic-embed-text
 
 /**
@@ -42,9 +44,9 @@ export async function processNext(config?: ModuleConfig): Promise<boolean> {
     // vector(768) column can't accept. Don't mark the doc permanently
     // failed — leave it as 'classified' so a fix-and-retry picks it up.
     if (vector.length !== EXPECTED_EMBEDDING_DIM) {
-      console.error(
-        `  Embedding dimension mismatch for doc ${item.id}: got ${vector.length}, expected ${EXPECTED_EMBEDDING_DIM}. ` +
-        `Check embedding.model in researcher.json. Doc left in 'classified' state for retry.`
+      log.error(
+        `dimension mismatch for doc ${item.id}: got ${vector.length}, expected ${EXPECTED_EMBEDDING_DIM}. ` +
+        `Check embedding.model in researcher.json. Doc left in 'classified' state for retry.`,
       );
       return true;
     }
@@ -63,9 +65,9 @@ export async function processNext(config?: ModuleConfig): Promise<boolean> {
       })
       .where(eq(documents.id, item.id));
 
-    console.log(`  Embedded: ${item.title.slice(0, 60)}`);
+    log.info(`Embedded: ${item.title.slice(0, 60)}`);
   } catch (e) {
-    console.error(`  Embedding failed for ${item.id}:`, e instanceof Error ? e.message : e);
+    log.error(`embed failed for doc ${item.id}: ${e instanceof Error ? e.message : e}`);
     await db.update(documents)
       .set({ status: 'failed_embed' })
       .where(eq(documents.id, item.id));

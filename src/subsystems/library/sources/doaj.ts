@@ -3,6 +3,9 @@ import { documents, researchLog } from '../../../db/schema';
 import { sql } from 'drizzle-orm';
 import type { SourcePlugin } from './types';
 import { isDuplicateByTitleOrUrl } from './dedupe';
+import { Logger } from '../../../core/logger';
+
+const log = new Logger('source:doaj');
 import type { ModuleConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
 
@@ -78,7 +81,7 @@ async function downloadTerm(term: string, moduleConfig?: ModuleConfig): Promise<
   }
 
   if (added > 0) {
-    console.log(`  DOAJ "${term}" — ${total} total, ${added} new`);
+    log.info(`  DOAJ "${term}" — ${total} total, ${added} new`);
   }
 
   return { added, total };
@@ -95,7 +98,7 @@ export const doajSource: SourcePlugin = {
       throw new Error('DOAJ source requires settings.searchTerms to be a non-empty array');
     }
 
-    console.log(`DOAJ source: ${searchTerms.length} search terms`);
+    log.info(`DOAJ source: ${searchTerms.length} search terms`);
 
     let totalAdded = 0;
     let grandTotal = 0;
@@ -117,7 +120,7 @@ export const doajSource: SourcePlugin = {
       },
     });
 
-    console.log(`DOAJ source done: ${totalAdded} new articles.`);
+    log.info(`DOAJ source done: ${totalAdded} new articles.`);
 
     return { added: totalAdded, total: grandTotal };
   },

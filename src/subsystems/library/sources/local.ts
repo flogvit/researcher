@@ -108,7 +108,7 @@ export async function indexLocalSource(config: LocalSourceConfig): Promise<{ add
     total++;
     const filePath = resolve(file);
     if (!filePath.startsWith(sourceRoot) && filePath + sep !== sourceRoot) {
-      console.warn(`local source: skipping ${filePath} (escapes ${config.path})`);
+      log.warn(`skipping ${filePath} (escapes ${config.path})`);
       continue;
     }
     const ext = extname(filePath);

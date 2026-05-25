@@ -2,7 +2,9 @@ import { getDb } from '../../../db/connection';
 import { documents } from '../../../db/schema';
 import { eq } from 'drizzle-orm';
 import type { ModuleConfig } from '../../../core/module-config';
+import { Logger } from '../../../core/logger';
 
+const log = new Logger('extractor');
 const DEFAULT_MIN_CONTENT = 2000;
 const DEFAULT_HTML_LIMIT = 15000;
 const DEFAULT_EXTRACTOR_MODEL = process.env.OLLAMA_MODEL ?? 'gemma3:27b';
@@ -138,7 +140,7 @@ export async function processNext(config?: ModuleConfig): Promise<boolean> {
           extractedAt: new Date(),
         })
         .where(eq(documents.id, item.id));
-      console.log(`  Extracted: ${item.title.slice(0, 60)} (${text.length} chars)`);
+      log.info(`Extracted: ${item.title.slice(0, 60)} (${text.length} chars)`);
     } else {
       await db.update(documents)
         .set({ status: 'failed_extract' })
@@ -149,7 +151,7 @@ export async function processNext(config?: ModuleConfig): Promise<boolean> {
     // first 500 chars of the error message so docs that consistently fail
     // can be triaged from the dashboard.
     const message = e instanceof Error ? e.message : String(e);
-    console.error(`text-extractor: doc ${item.id} (${item.title.slice(0, 60)}) failed: ${message}`);
+    log.error(`doc ${item.id} (${item.title.slice(0, 60)}) failed: ${message}`);
     await db.update(documents)
       .set({ status: 'failed_extract', rawContent: message.slice(0, 500) })
       .where(eq(documents.id, item.id));

@@ -3,6 +3,9 @@ import { documents, researchLog } from '../../../db/schema';
 import { sql } from 'drizzle-orm';
 import type { SourcePlugin, SourceFilters } from './types';
 import { isDuplicateByTitleOrUrl } from './dedupe';
+import { Logger } from '../../../core/logger';
+
+const log = new Logger('source:semantic-scholar');
 import type { ModuleConfig, DelayConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
 
@@ -52,7 +55,7 @@ async function searchTerm(
       const response = await fetch(`${API_BASE}?${params}`, { headers });
       if (response.status === 429) {
         // Rate limited — wait and retry
-        console.log('  Semantic Scholar rate limited, waiting 60s...');
+        log.info('  Semantic Scholar rate limited, waiting 60s...');
         await Bun.sleep(60_000);
         continue;
       }
@@ -120,7 +123,7 @@ async function searchTerm(
   }
 
   if (added > 0) {
-    console.log(`  Semantic Scholar "${term}" — ${total} total, ${added} new`);
+    log.info(`  Semantic Scholar "${term}" — ${total} total, ${added} new`);
   }
 
   return { added, total };
@@ -139,7 +142,7 @@ export const semanticScholarSource: SourcePlugin = {
       throw new Error('Semantic Scholar source requires settings.searchTerms to be a non-empty array');
     }
 
-    console.log(`Semantic Scholar source: ${searchTerms.length} search terms`);
+    log.info(`Semantic Scholar source: ${searchTerms.length} search terms`);
 
     let totalAdded = 0;
     let grandTotal = 0;
@@ -161,7 +164,7 @@ export const semanticScholarSource: SourcePlugin = {
       },
     });
 
-    console.log(`Semantic Scholar source done: ${totalAdded} new articles.`);
+    log.info(`Semantic Scholar source done: ${totalAdded} new articles.`);
 
     return { added: totalAdded, total: grandTotal };
   },

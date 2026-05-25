@@ -3,6 +3,9 @@ import { documents, researchLog } from '../../../db/schema';
 import { sql } from 'drizzle-orm';
 import type { SourcePlugin, SourceFilters } from './types';
 import { isDuplicateByTitleOrUrl } from './dedupe';
+import { Logger } from '../../../core/logger';
+
+const log = new Logger('source:crossref');
 import type { ModuleConfig, DelayConfig } from '../../../core/module-config';
 import { randomDelay } from '../../../core/module-config';
 
@@ -132,7 +135,7 @@ async function searchTerm(
   }
 
   if (added > 0) {
-    console.log(`  CrossRef "${term}" — ${total} total, ${added} new`);
+    log.info(`  CrossRef "${term}" — ${total} total, ${added} new`);
   }
 
   return { added, total };
@@ -151,7 +154,7 @@ export const crossrefSource: SourcePlugin = {
       throw new Error('CrossRef source requires settings.searchTerms to be a non-empty array');
     }
 
-    console.log(`CrossRef source: ${searchTerms.length} search terms`);
+    log.info(`CrossRef source: ${searchTerms.length} search terms`);
 
     let totalAdded = 0;
     let grandTotal = 0;
@@ -173,7 +176,7 @@ export const crossrefSource: SourcePlugin = {
       },
     });
 
-    console.log(`CrossRef source done: ${totalAdded} new articles.`);
+    log.info(`CrossRef source done: ${totalAdded} new articles.`);
 
     return { added: totalAdded, total: grandTotal };
   },

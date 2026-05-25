@@ -2,6 +2,9 @@ import { getDb } from '../db/connection';
 import { embeddings, findings } from '../db/schema';
 import { sql } from 'drizzle-orm';
 import type { ProjectConfig } from '../config';
+import { Logger } from '../core/logger';
+
+const log = new Logger('embeddings');
 
 let embeddingBaseUrl = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
 let embeddingModel = 'nomic-embed-text';
@@ -65,7 +68,7 @@ export async function embedFindings(): Promise<number> {
       });
       count++;
     } catch (e) {
-      console.error(`Failed to embed finding ${f.id}:`, e instanceof Error ? e.message : e);
+      log.error(`failed to embed finding ${f.id}: ${e instanceof Error ? e.message : e}`);
     }
   }
 

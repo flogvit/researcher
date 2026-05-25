@@ -4,6 +4,9 @@ import { eq } from 'drizzle-orm';
 import { LLM, RateLimitError } from '../../../llm/llm';
 import { loadPrompt } from '../../../core/prompt-loader';
 import type { ModuleConfig } from '../../../core/module-config';
+import { Logger } from '../../../core/logger';
+
+const log = new Logger('classifier');
 
 interface ClassificationResult {
   summary: string;
@@ -69,10 +72,10 @@ export async function processNext(llm: LLM, projectDir: string = process.cwd(), 
       })
       .where(eq(documents.id, item.id));
 
-    console.log(`  Classified: ${item.title.slice(0, 60)}`);
+    log.info(`Classified: ${item.title.slice(0, 60)}`);
   } catch (e) {
     if (e instanceof RateLimitError) throw e; // Let dispatcher handle rate limits
-    console.error(`  Classification failed for ${item.id}:`, e instanceof Error ? e.message : e);
+    log.error(`failed for doc ${item.id}: ${e instanceof Error ? e.message : e}`);
     await db.update(documents)
       .set({ status: 'failed_classify' })
       .where(eq(documents.id, item.id));

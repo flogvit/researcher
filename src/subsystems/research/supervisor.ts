@@ -3,6 +3,9 @@ import { agentTasks, researchLog, findings } from '../../db/schema';
 import { desc, sql, eq } from 'drizzle-orm';
 import { LLM } from '../../llm/llm';
 import { loadPrompt } from '../../core/prompt-loader';
+import { Logger } from '../../core/logger';
+
+const log = new Logger('supervisor');
 
 interface SupervisorAction {
   type: 'delete_failed' | 'observation' | 'adjust_strategy';
@@ -99,7 +102,7 @@ export class Supervisor {
           const deleted = await db.delete(agentTasks)
             .where(eq(agentTasks.status, 'failed'))
             .returning();
-          console.log(`Supervisor: deleted ${deleted.length} failed tasks. ${action.reason}`);
+          log.info(`deleted ${deleted.length} failed tasks. ${action.reason}`);
         }
       }
 
@@ -115,9 +118,9 @@ export class Supervisor {
         },
       });
 
-      console.log(`Supervisor: ${result.systemHealth} — ${result.diagnosis}`);
+      log.info(`${result.systemHealth} — ${result.diagnosis}`);
     } catch (e) {
-      console.error('Supervisor check failed:', e instanceof Error ? e.message : e);
+      log.error(`supervisor check failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 }

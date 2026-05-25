@@ -104,47 +104,43 @@ export class LibraryDispatcher {
     })));
   }
 
-  private async runSources(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {
-    const sources = ctx.config.library.sources.filter(s => s.enabled);
-
-    for (const sourceConfig of sources) {
-      const plugin = getSourcePlugin(sourceConfig.type);
-      if (!plugin) {
-        this.log.warn(`Unknown source plugin: ${sourceConfig.type}`);
-        continue;
-      }
-
-      try {
-        this.log.info(`Running source: ${plugin.name}`);
-        const result = await plugin.fetch(sourceConfig.settings, config);
-        this.log.info(`Source ${plugin.name}: ${result.added} new, ${result.total} total`);
-        this.lastSourceRun[sourceConfig.type] = Date.now();
-      } catch (e) {
-        this.log.error(`Source ${plugin.name} failed: ${e instanceof Error ? e.message : e}`);
-      }
+  /**
+   * Run a single HTTP source plugin and update its last-run timestamp.
+   * Shared by the unconditional runSources() and the interval-gated
+   * maybeRunSources() — used to be two near-identical loops (#66).
+   */
+  private async runOneSource(
+    sourceConfig: { type: string; settings: Record<string, unknown> },
+    config: ModuleConfig,
+    label: string,
+  ): Promise<void> {
+    const plugin = getSourcePlugin(sourceConfig.type);
+    if (!plugin) {
+      this.log.warn(`Unknown source plugin: ${sourceConfig.type}`);
+      return;
+    }
+    try {
+      this.log.info(`Running source: ${plugin.name}${label ? ` (${label})` : ''}`);
+      const result = await plugin.fetch(sourceConfig.settings, config);
+      this.log.info(`Source ${plugin.name}: ${result.added} new, ${result.total} total`);
+      this.lastSourceRun[sourceConfig.type] = Date.now();
+    } catch (e) {
+      this.log.error(`Source ${plugin.name} failed: ${e instanceof Error ? e.message : e}`);
     }
   }
 
-  private async maybeRunSources(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {
+  private async runSources(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {
     const sources = ctx.config.library.sources.filter(s => s.enabled);
+    for (const sc of sources) await this.runOneSource(sc, config, '');
+  }
+
+  private async maybeRunSources(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {
     const now = Date.now();
-
-    for (const sourceConfig of sources) {
-      const lastRun = this.lastSourceRun[sourceConfig.type] ?? 0;
-      const intervalMs = (sourceConfig.interval ?? 86400) * 1000;
-
+    for (const sc of ctx.config.library.sources.filter(s => s.enabled)) {
+      const lastRun = this.lastSourceRun[sc.type] ?? 0;
+      const intervalMs = (sc.interval ?? 86400) * 1000;
       if (now - lastRun >= intervalMs) {
-        const plugin = getSourcePlugin(sourceConfig.type);
-        if (!plugin) continue;
-
-        try {
-          this.log.info(`Running source: ${plugin.name} (interval elapsed)`);
-          const result = await plugin.fetch(sourceConfig.settings, config);
-          this.log.info(`Source ${plugin.name}: ${result.added} new`);
-          this.lastSourceRun[sourceConfig.type] = now;
-        } catch (e) {
-          this.log.error(`Source ${plugin.name} failed: ${e instanceof Error ? e.message : e}`);
-        }
+        await this.runOneSource(sc, config, 'interval elapsed');
       }
     }
   }

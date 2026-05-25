@@ -26,16 +26,23 @@ function stripHTML(html: string): string {
     .trim();
 }
 
-async function extractPDF(base64Content: string): Promise<string | null> {
+async function extractPDF(bytes: Buffer | null, base64Fallback: string | null): Promise<string | null> {
   // Run pdf-parse in a subprocess so a large/malformed PDF can't block
   // the main event loop (which also serves Next.js admin polling). The
   // worker reads base64 from stdin and writes extracted text to stdout (#46).
+  //
+  // New rows store the PDF in documents.raw_bytes (bytea) per #24/#39.
+  // Legacy rows still carry base64 in raw_content; we fall back so the
+  // migration is non-destructive.
+  const base64 = bytes ? bytes.toString('base64') : base64Fallback;
+  if (!base64) return null;
+
   try {
     const { spawnWithTimeout } = await import('../../../llm/llm');
     const workerPath = new URL('./pdf-worker.ts', import.meta.url).pathname;
     const { stdout, exitCode, timedOut } = await spawnWithTimeout(
       ['bun', workerPath],
-      { stdin: new Response(base64Content), timeoutMs: 5 * 60_000 },
+      { stdin: new Response(base64), timeoutMs: 5 * 60_000 },
     );
     if (timedOut || exitCode !== 0) return null;
     return stdout.trim() || null;
@@ -104,20 +111,21 @@ export async function processNext(config?: ModuleConfig): Promise<boolean> {
       url: documents.url,
       title: documents.title,
       rawContent: documents.rawContent,
+      rawBytes: documents.rawBytes,
       contentType: documents.contentType,
     })
     .from(documents)
     .where(eq(documents.status, 'downloaded'))
     .limit(1);
 
-  if (!item || !item.rawContent) return false;
+  if (!item || (!item.rawContent && !item.rawBytes)) return false;
 
   try {
     let text: string | null = null;
 
     if (item.contentType === 'pdf') {
-      text = await extractPDF(item.rawContent);
-    } else {
+      text = await extractPDF(item.rawBytes, item.rawContent);
+    } else if (item.rawContent) {
       // HTML or text
       text = stripHTML(item.rawContent);
 

@@ -9,7 +9,12 @@ import {
   index,
   vector,
   boolean,
+  customType,
 } from 'drizzle-orm/pg-core';
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() { return 'bytea'; },
+});
 
 // Forward declarations resolved at module init — projects is defined below
 // but the agentTasks FK references it. Drizzle handles the cycle via the
@@ -119,7 +124,8 @@ export const documents = pgTable('documents', {
   id: serial('id').primaryKey(),
   url: text('url'),
   title: text('title').notNull(),
-  rawContent: text('raw_content'),                     // Raw downloaded content before text extraction
+  rawContent: text('raw_content'),                     // HTML/text downloaded content
+  rawBytes: bytea('raw_bytes'),                         // PDF (and other binary) bytes — replaces base64 in raw_content (#24, #39)
   content: text('content'),                            // Extracted text content
   contentType: varchar('content_type', { length: 50 }).notNull(), // 'article', 'book_chapter', 'encyclopedia', 'methodology', etc.
   language: varchar('language', { length: 10 }).default('en'),

@@ -45,12 +45,12 @@ export async function processNext(config?: ModuleConfig): Promise<boolean> {
     }
 
     if (contentType.includes('application/pdf')) {
-      // PDFs land in raw_content as base64 — see issue #39 for why this
-      // is a future schema migration target.
-      const base64 = Buffer.from(body).toString('base64');
+      // PDFs go into raw_bytes (bytea) rather than the previous base64-in-
+      // TEXT pattern (#24, #39). raw_content stays NULL for PDFs.
       await db.update(documents)
         .set({
-          rawContent: base64,
+          rawBytes: Buffer.from(body),
+          rawContent: null,
           contentType: 'pdf',
           status: 'downloaded',
           downloadedAt: new Date(),

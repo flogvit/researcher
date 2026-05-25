@@ -142,12 +142,30 @@ export class PaperPipeline {
     }
   }
 
+  /**
+   * Top-level pipeline that drives a discovery from 'draft' through
+   * originality → references → peer review → revision (#65 split).
+   *
+   * Each phase is now its own method so module configs can skip steps
+   * (originality.enabled = false, etc.) and unit tests can target a phase.
+   * Method returns true when subsequent phases should run, false to abort.
+   */
   async reviewAndRevise(discovery: typeof discoveries.$inferSelect): Promise<void> {
     this.log.info(`Reviewing paper: "${discovery.title}"...`);
 
-    const db = getDb();
+    const proceed = await this.checkOriginality(discovery);
+    if (!proceed) return;
 
-    // Step 1: Originality check
+    await this.verifyReferences(discovery);
+
+    const review = await this.peerReview(discovery);
+    if (!review) return;
+
+    await this.revise(discovery, review);
+  }
+
+  private async checkOriginality(discovery: typeof discoveries.$inferSelect): Promise<boolean> {
+    const db = getDb();
     try {
       const origTemplate = await loadPrompt(this.projectDir, 'originality-check');
       const origPrompt = LLM.formatPrompt(origTemplate, {
@@ -182,13 +200,16 @@ export class PaperPipeline {
             updatedAt: new Date(),
           })
           .where(eq(discoveries.id, discovery.id));
-        return;
+        return false;
       }
     } catch (e) {
       this.log.error(`Originality check failed (proceeding): ${e instanceof Error ? e.message : e}`);
     }
+    return true;
+  }
 
-    // Step 2: Reference verification
+  private async verifyReferences(discovery: typeof discoveries.$inferSelect): Promise<void> {
+    const db = getDb();
     try {
       const refTemplate = await loadPrompt(this.projectDir, 'reference-check');
       const refPrompt = LLM.formatPrompt(refTemplate, {
@@ -259,8 +280,10 @@ Rewrite the ENTIRE paper. Be honest — it is better to say "this requires furth
     } catch (e) {
       this.log.error(`Reference check failed (proceeding): ${e instanceof Error ? e.message : e}`);
     }
+  }
 
-    // Step 3: Peer review
+  private async peerReview(discovery: typeof discoveries.$inferSelect): Promise<ReviewResult | null> {
+    const db = getDb();
     const reviewTemplate = await loadPrompt(this.projectDir, 'peer-review');
     const reviewPrompt = LLM.formatPrompt(reviewTemplate, {
       title: discovery.title,
@@ -274,7 +297,7 @@ Rewrite the ENTIRE paper. Be honest — it is better to say "this requires furth
       review = response.data;
     } catch (e) {
       this.log.error(`Peer review failed for "${discovery.title}": ${e instanceof Error ? e.message : e}`);
-      return;
+      return null;
     }
 
     await db.insert(reviewFeedback).values({
@@ -307,7 +330,7 @@ Rewrite the ENTIRE paper. Be honest — it is better to say "this requires furth
         .set({ paperStatus: 'approved', updatedAt: new Date() })
         .where(eq(discoveries.id, discovery.id));
       this.log.info(`Paper approved: "${discovery.title}"`);
-      return;
+      return null;
     }
 
     if (review.verdict === 'reject') {
@@ -315,10 +338,14 @@ Rewrite the ENTIRE paper. Be honest — it is better to say "this requires furth
         .set({ paperStatus: 'rejected', status: 'rejected', updatedAt: new Date() })
         .where(eq(discoveries.id, discovery.id));
       this.log.info(`Paper rejected: "${discovery.title}"`);
-      return;
+      return null;
     }
 
-    // Step 4: Revision
+    return review;
+  }
+
+  private async revise(discovery: typeof discoveries.$inferSelect, review: ReviewResult): Promise<void> {
+    const db = getDb();
     if (review.requiredRevisions.length === 0) {
       await db.update(discoveries)
         .set({ paperStatus: 'approved', updatedAt: new Date() })

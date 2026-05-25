@@ -24,6 +24,7 @@ import { registerSubsystemCommands } from './cli-subsystem';
 import { writeBootstrapResult, buildConfigFromBootstrap, setupProjectDatabase } from './init/write-bootstrap';
 import { registerChatCommand } from './commands/chat';
 import { registerProposalsCommand } from './commands/proposals';
+import { registerDraftsCommand } from './commands/drafts';
 
 const program = new Command();
 
@@ -738,6 +739,7 @@ project
 
 registerChatCommand(program);
 registerProposalsCommand(program);
+registerDraftsCommand(program);
 
 // ─── Run ──────────────────────────────────────────────────────────────────────
 

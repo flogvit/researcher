@@ -197,11 +197,15 @@ export const chatSessions = pgTable('chat_sessions', {
   id: serial('id').primaryKey(),
   scope: varchar('scope', { length: 100 }).notNull().default('global'),
   title: text('title'),
+  // Optional anchor to a draft for Fase 4 — when set, context assembly
+  // injects the current draft body alongside peer-conclusions (#101).
+  draftId: integer('draft_id'),
   startedAt: timestamp('started_at').notNull().defaultNow(),
   lastTurnAt: timestamp('last_turn_at').notNull().defaultNow(),
 }, (table) => [
   index('chat_sessions_scope_idx').on(table.scope),
   index('chat_sessions_last_turn_idx').on(table.lastTurnAt.desc()),
+  index('chat_sessions_draft_idx').on(table.draftId),
 ]);
 
 export const chatMessages = pgTable('chat_messages', {
@@ -244,4 +248,53 @@ export const notificationSubscriptions = pgTable('notification_subscriptions', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => [
   index('notification_subscriptions_enabled_idx').on(table.enabled),
+]);
+
+// ─── Authoring layer / Drafts (Fase 4 #98) ──────────────────────────────────
+
+export const drafts = pgTable('drafts', {
+  id: serial('id').primaryKey(),
+  projectId: integer('project_id').references(() => projects.id, { onDelete: 'set null' }),
+  skill: varchar('skill', { length: 100 }),
+  template: varchar('template', { length: 100 }),
+  title: text('title').notNull(),
+  bodyMd: text('body_md').notNull().default(''),
+  researchScope: jsonb('research_scope'),
+  status: varchar('status', { length: 30 }).notNull().default('draft'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (table) => [
+  index('drafts_project_idx').on(table.projectId),
+  index('drafts_status_idx').on(table.status),
+]);
+
+export const draftRevisions = pgTable('draft_revisions', {
+  id: serial('id').primaryKey(),
+  draftId: integer('draft_id').notNull().references(() => drafts.id, { onDelete: 'cascade' }),
+  bodyMd: text('body_md').notNull(),
+  summary: text('summary'),
+  source: varchar('source', { length: 50 }).notNull().default('manual'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (table) => [
+  index('draft_revisions_draft_idx').on(table.draftId, table.createdAt.desc()),
+]);
+
+export const draftEditProposals = pgTable('draft_edit_proposals', {
+  id: serial('id').primaryKey(),
+  draftId: integer('draft_id').notNull().references(() => drafts.id, { onDelete: 'cascade' }),
+  kind: varchar('kind', { length: 30 }).notNull(),
+  rangeStart: integer('range_start'),
+  rangeEnd: integer('range_end'),
+  sectionAnchor: text('section_anchor'),
+  original: text('original'),
+  replacement: text('replacement').notNull(),
+  rationale: text('rationale'),
+  status: varchar('status', { length: 20 }).notNull().default('pending'),
+  source: varchar('source', { length: 50 }),
+  sourceFindingId: integer('source_finding_id').references(() => findings.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  resolvedAt: timestamp('resolved_at'),
+}, (table) => [
+  index('draft_edit_proposals_draft_idx').on(table.draftId, table.status),
+  index('draft_edit_proposals_status_idx').on(table.status, table.createdAt.desc()),
 ]);

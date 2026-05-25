@@ -64,6 +64,25 @@ export async function handleTurn(
 
   const scope: Scope = session.scope === 'global' ? 'global' : { project: session.scope.replace(/^project:/, '') };
 
+  // Anchored draft (#101): when session.draftId is set, include the current
+  // body + open proposals in the prompt.
+  let draftContext = '';
+  if (session.draftId) {
+    try {
+      const draftStore = await import('../drafts/store');
+      const draft = await draftStore.getDraft(session.draftId);
+      if (draft) {
+        const proposals = await draftStore.listProposals(session.draftId);
+        const pending = proposals.length > 0
+          ? `\n\nPending edit proposals:\n${proposals.slice(0, 5).map(p => `- ${p.rationale ?? p.kind}`).join('\n')}`
+          : '';
+        draftContext = `<anchored-draft id="${draft.id}" title="${draft.title}">\n${draft.bodyMd}\n</anchored-draft>${pending}\n\n`;
+      }
+    } catch (e) {
+      log.warn(`draft context load failed: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
   const userModel = getDefaultUserModel();
   let memoryContext = '';
   let usedConclusions = 0;
@@ -89,7 +108,7 @@ export async function handleTurn(
     .map(m => `${m.role}: ${m.content}`)
     .join('\n\n');
 
-  const fullPrompt = `${memoryContext}<conversation>\n${historyText}\n</conversation>\n\nUser: ${userMessage}`;
+  const fullPrompt = `${memoryContext}${draftContext}<conversation>\n${historyText}\n</conversation>\n\nUser: ${userMessage}`;
 
   const llm = createLLM('chat', config.llm, config.agents);
 

@@ -165,7 +165,7 @@ export class ResearchDispatcher extends BaseDispatcher {
         }
 
         // Save finding
-        await db.insert(findings).values({
+        const [savedFinding] = await db.insert(findings).values({
           agentType: task.agentType,
           taskId: task.id,
           finding: result.finding,
@@ -173,7 +173,22 @@ export class ResearchDispatcher extends BaseDispatcher {
           reasoning: result.reasoning,
           sources: result.sources,
           metadata: { ...result.metadata ?? {}, reviewQuality },
-        });
+        }).returning({ id: findings.id, projectId: findings.projectId });
+
+        // Emit bus event so the notification system + draft auto-research
+        // can react (#91, #104). Strong evidence is what users care about.
+        try {
+          const { emitEvent } = await import('../../subsystems/notifications/event-bus');
+          if (result.evidenceStrength === 'strong_evidence' || result.evidenceStrength === 'proven') {
+            emitEvent('finding.strong', { findingId: savedFinding.id, finding: result.finding });
+          }
+          // Async fan-out to draft auto-research; failures don't block the dispatcher.
+          void import('../../subsystems/drafts/auto-research')
+            .then(m => m.findingToProposals(savedFinding.id, savedFinding.projectId ?? undefined))
+            .catch(e => this.log.warn(`auto-research dispatch failed: ${e instanceof Error ? e.message : e}`));
+        } catch (e) {
+          this.log.warn(`event emit failed: ${e instanceof Error ? e.message : e}`);
+        }
 
         // Mark task completed
         await db.update(agentTasks)

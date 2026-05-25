@@ -1,6 +1,5 @@
 import type { SubsystemContext } from '../../core/subsystem';
 import type { ModuleConfig } from '../../core/module-config';
-import { loadModuleConfig } from '../../core/prompt-loader';
 import { getSourcePlugin } from './sources';
 import { indexLocalSource } from './sources/local';
 import * as downloader from './stages/downloader';
@@ -8,43 +7,26 @@ import * as extractor from './stages/text-extractor';
 import * as classifier from './stages/classifier';
 import * as embedder from './stages/embedder';
 import { LLM } from '../../llm/llm';
-import { Logger } from '../../core/logger';
+import { BaseDispatcher } from '../../core/base-dispatcher';
 
-export class LibraryDispatcher {
-  private running = false;
-  private tickInterval = 2000;
+export class LibraryDispatcher extends BaseDispatcher {
   private lastSourceRun: Record<string, number> = {};
   private lastLocalSourceRun = 0;
-  private log = new Logger('library');
-  private moduleConfig: ModuleConfig | null = null;
 
-  private async getModuleConfig(): Promise<ModuleConfig> {
-    if (!this.moduleConfig) {
-      this.moduleConfig = await loadModuleConfig(process.cwd(), 'library');
-    }
-    return this.moduleConfig;
+  constructor() {
+    super('library', 2000);
   }
 
   async start(ctx: SubsystemContext): Promise<void> {
-    this.running = true;
     const config = await this.getModuleConfig();
-    this.tickInterval = config.tickInterval ?? 2000;
-    this.log.info('Library pipeline started');
 
-    // Run sources on startup
+    // One-shot startup work (#66/#40 surrounded by the base while-loop).
     await this.runSources(ctx, config);
     await this.maybeRunLocalSources(ctx);
-
-    // Mark documents without URLs as failed (can't download them)
     const noUrl = await downloader.markNoUrl();
     if (noUrl > 0) this.log.info(`Marked ${noUrl} documents without URL as failed`);
 
-    while (this.running) {
-      await this.tick(ctx, config);
-      await Bun.sleep(this.tickInterval);
-    }
-
-    this.log.info('Library pipeline stopped');
+    await super.start(ctx);
   }
 
   async runOnce(ctx: SubsystemContext): Promise<void> {
@@ -81,7 +63,7 @@ export class LibraryDispatcher {
     this.log.info('Library pipeline pass complete');
   }
 
-  private async tick(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {
+  protected async tick(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {
     // Check if any source needs to run
     await this.maybeRunSources(ctx, config);
     await this.maybeRunLocalSources(ctx);
@@ -167,9 +149,5 @@ export class LibraryDispatcher {
     if (now - this.lastLocalSourceRun >= minInterval) {
       await this.runLocalSources(ctx);
     }
-  }
-
-  async stop(): Promise<void> {
-    this.running = false;
   }
 }

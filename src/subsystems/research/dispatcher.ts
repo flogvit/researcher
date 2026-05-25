@@ -4,8 +4,8 @@ import { getDb } from '../../db/connection';
 import { agentTasks, findings, researchLog, projects, documents, embeddings } from '../../db/schema';
 import { eq, desc, sql, asc, and } from 'drizzle-orm';
 import { LLM, RateLimitError, createLLM } from '../../llm/llm';
-import { Logger } from '../../core/logger';
-import { loadPrompt, loadModuleConfig } from '../../core/prompt-loader';
+import { loadPrompt } from '../../core/prompt-loader';
+import { BaseDispatcher } from '../../core/base-dispatcher';
 import { claimNextTask } from '../../core/task-queue';
 import { escapeLike } from '../../core/like-escape';
 import { Triage } from './triage';
@@ -18,17 +18,15 @@ import type { BaseAgent } from './agents/base-agent';
 import { resolve } from 'node:path';
 import { searchSimilar } from '../../llm/embeddings';
 
-export class ResearchDispatcher {
-  private running = false;
+export class ResearchDispatcher extends BaseDispatcher {
   private tasksSinceReflection = 0;
   private lastSupervisorTime = 0;
   private lastGenerateTime = 0;
   private agents: Map<string, BaseAgent> = new Map();
-  private log = new Logger('research');
   private projectDir: string;
-  private moduleConfig: ModuleConfig | null = null;
 
   constructor() {
+    super('research', 2000);
     this.projectDir = process.cwd();
   }
 
@@ -36,55 +34,22 @@ export class ResearchDispatcher {
     return createLLM(agentName, ctx.config.llm, ctx.config.agents);
   }
 
-  private async getModuleConfig(): Promise<ModuleConfig> {
-    if (!this.moduleConfig) {
-      this.moduleConfig = await loadModuleConfig(this.projectDir, 'research');
-    }
-    return this.moduleConfig;
-  }
-
   private isStepEnabled(config: ModuleConfig, stepName: string): boolean {
     const step = config.steps.find(s => s.name === stepName);
     return step?.enabled !== false;
-  }
-
-  async start(ctx: SubsystemContext): Promise<void> {
-    this.running = true;
-    const config = await this.getModuleConfig();
-    this.log.info('Research dispatcher started');
-
-    while (this.running) {
-      try {
-        await this.tick(ctx, config);
-      } catch (e) {
-        if (e instanceof RateLimitError) {
-          this.log.warn(`Rate limited. Waiting ${Math.ceil(e.waitMs / 60000)} min...`);
-          const cap = config.rateLimitRecoveryCap ?? 60000;
-          await Bun.sleep(Math.min(e.waitMs, cap));
-        } else {
-          this.log.error(`Tick error: ${e instanceof Error ? e.message : e}`);
-        }
-      }
-      await Bun.sleep(config.tickInterval ?? 2000);
-    }
-
-    this.log.info('Research dispatcher stopped');
   }
 
   async runOnce(ctx: SubsystemContext): Promise<void> {
     this.log.info('Running research (one pass)');
     const config = await this.getModuleConfig();
 
-    // Process all pending tasks
     let processed = true;
     while (processed) {
       processed = await this.processOneTask(ctx, config);
     }
 
-    // Check project phases
     await this.checkProjects(ctx);
 
-    // Reflect if needed
     if (this.tasksSinceReflection > 0 && this.isStepEnabled(config, 'reflect')) {
       await this.runReflection(ctx);
     }
@@ -92,11 +57,7 @@ export class ResearchDispatcher {
     this.log.info('Research pass complete');
   }
 
-  async stop(): Promise<void> {
-    this.running = false;
-  }
-
-  private async tick(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {
+  protected async tick(ctx: SubsystemContext, config: ModuleConfig): Promise<void> {
     if (LLM.isCurrentlyRateLimited()) return;
 
     const now = Date.now();

@@ -21,6 +21,7 @@ import { loadState, saveState } from './core/state';
 import { recoverStaleTasks, recoverStaleDownloads } from './core/task-queue';
 import type { SubsystemContext, SubsystemStatus } from './core/subsystem';
 import { registerSubsystemCommands } from './cli-subsystem';
+import { writeBootstrapResult, buildConfigFromBootstrap, setupProjectDatabase } from './init/write-bootstrap';
 
 const program = new Command();
 
@@ -103,70 +104,16 @@ program
       rl.close();
 
       if (finalDomain) {
-        // AI-bootstrapped setup
         const result = await bootstrapProject(finalDomain, finalLanguage);
         bootstrapped = true;
 
-        config = {
-          name: result.name,
-          description: result.description,
-          language: result.language,
-          database: `researcher_${result.name.replace(/-/g, '_')}`,
-          llm: {
-            provider: 'claude',
-            model: 'opus',
-            allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
-          },
-          library: {
-            sources: [{
-              type: 'doaj',
-              enabled: true,
-              interval: 86400,
-              settings: { searchTerms: result.searchTerms },
-            }],
-          },
-          research: {
-            agentTypes: result.agents.map(a => a.name),
-            strategyFile: 'research/strategy.md',
-            reflectEvery: 3,
-          },
-        };
-
+        config = buildConfigFromBootstrap(result);
         writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
         console.log('Created researcher.json');
 
-        // Write all bootstrap output — agents go to prompts/ (same as all other prompts)
-        const promptsDir = resolve(cwd, 'research', 'prompts');
-        mkdirSync(promptsDir, { recursive: true });
-        for (const agent of result.agents) {
-          writeFileSync(resolve(promptsDir, `${agent.name}.md`), agent.prompt);
-          console.log(`  Created agent: ${agent.name}`);
-        }
-        for (const method of result.methods) {
-          const dir = resolve(cwd, 'research', 'methods');
-          mkdirSync(dir, { recursive: true });
-          writeFileSync(resolve(dir, `${method.name}.md`), method.content);
-          console.log(`  Created method: ${method.name}`);
-        }
-        mkdirSync(resolve(cwd, 'research'), { recursive: true });
-        writeFileSync(resolve(cwd, 'research', 'strategy.md'), result.strategy);
-        console.log('  Created strategy');
-        if (result.moduleConfigs) {
-          const dir = resolve(cwd, 'research', 'modules');
-          mkdirSync(dir, { recursive: true });
-          for (const [name, mc] of Object.entries(result.moduleConfigs)) {
-            writeFileSync(resolve(dir, `${name}.json`), JSON.stringify(mc, null, 2) + '\n');
-            console.log(`  Created module config: ${name}`);
-          }
-        }
-        if (result.prompts) {
-          const dir = resolve(cwd, 'research', 'prompts');
-          mkdirSync(dir, { recursive: true });
-          for (const p of result.prompts) {
-            writeFileSync(resolve(dir, `${p.name}.md`), p.content);
-            console.log(`  Created prompt: ${p.name}`);
-          }
-        }
+        await writeBootstrapResult(cwd, result, {
+          onProgress: msg => console.log(`  ${msg}`),
+        });
       } else {
         // No domain — blank defaults
         config = {
@@ -193,32 +140,8 @@ program
     const strategyPath = resolve(researchDir, 'strategy.md');
     if (!existsSync(strategyPath)) writeFileSync(strategyPath, '# Research Strategy\n\n');
 
-    // Create database + run migrations
-    const dbName = config.database;
-    console.log(`Creating database "${dbName}"...`);
-    const adminClient = new SQL('postgresql://postgres@localhost:5432/postgres');
-    try {
-      await adminClient.unsafe(`CREATE DATABASE "${dbName}"`);
-      console.log(`Database "${dbName}" created.`);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes('already exists')) {
-        console.log(`Database "${dbName}" already exists, skipping.`);
-      } else {
-        throw e;
-      }
-    } finally {
-      adminClient.close();
-    }
-
-    console.log('Running migrations...');
-    const dbUrl = `postgresql://postgres@localhost:5432/${dbName}`;
-    const migrationClient = new SQL(dbUrl);
-    await migrationClient.unsafe('CREATE EXTENSION IF NOT EXISTS vector');
-    const db = drizzle({ client: migrationClient });
-    const packageRoot = resolve(import.meta.dir, '..');
-    await migrate(db, { migrationsFolder: resolve(packageRoot, 'drizzle') });
-    migrationClient.close();
+    console.log(`Creating database "${config.database}" and running migrations...`);
+    await setupProjectDatabase(config.database, resolve(import.meta.dir, '..', 'drizzle'));
     console.log('Migrations complete.');
 
     console.log(`\nProject "${config.name}" initialized successfully.`);

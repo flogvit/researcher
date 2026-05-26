@@ -1,0 +1,6 @@
+{
+  "tickInterval": 5000,
+  "rateLimitRecoveryCap": 60000,
+  "reviewThreshold": 10,
+  "steps": []
+}

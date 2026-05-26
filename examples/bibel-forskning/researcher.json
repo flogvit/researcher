@@ -6,7 +6,14 @@
   "llm": {
     "provider": "claude",
     "model": "sonnet",
-    "allowedTools": ["Read", "Glob", "Grep", "WebFetch", "WebSearch"]
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch"
+    ],
+    "maxTurns": 25
   },
   "library": {
     "sources": [
@@ -75,11 +82,22 @@
           ]
         }
       }
-    ]
+    ],
+    "localSources": []
   },
   "research": {
-    "agentTypes": ["linguist", "methodology-reader"],
+    "agentTypes": [
+      "linguist",
+      "methodology-reader"
+    ],
     "strategyFile": "research/strategy.md",
     "reflectEvery": 3
+  },
+  "embedding": {
+    "model": "nomic-embed-text"
+  },
+  "orchestrator": {
+    "dependencyTimeout": 60000,
+    "dependencyPollInterval": 500
   }
 }

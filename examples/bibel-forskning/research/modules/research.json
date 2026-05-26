@@ -1,0 +1,32 @@
+{
+  "tickInterval": 2000,
+  "minFindings": 5,
+  "steps": [
+    {
+      "name": "triage",
+      "enabled": true
+    },
+    {
+      "name": "execute",
+      "enabled": true
+    },
+    {
+      "name": "review",
+      "enabled": true
+    },
+    {
+      "name": "reflect",
+      "enabled": true,
+      "every": 3
+    },
+    {
+      "name": "generate-work",
+      "enabled": true
+    },
+    {
+      "name": "supervisor",
+      "enabled": true,
+      "every": 300
+    }
+  ]
+}

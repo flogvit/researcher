@@ -14,7 +14,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const denied = verifyAdminRequest(request);
   if (denied) return denied;
-  await getServerContext();
+  const { projectDir } = await getServerContext();
   const body = await request.json() as {
     title: string;
     projectId?: number;
@@ -24,6 +24,6 @@ export async function POST(request: Request) {
     researchScope?: unknown;
   };
   if (!body.title) return NextResponse.json({ error: 'title required' }, { status: 400 });
-  const draft = await createDraft(body);
+  const draft = await createDraft({ ...body, projectDir });
   return NextResponse.json(draft, { status: 201 });
 }

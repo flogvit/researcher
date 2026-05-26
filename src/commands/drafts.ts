@@ -46,12 +46,20 @@ export function registerDraftsCommand(program: Command): void {
     getClient().close();
   });
 
-  cmd.command('create <title>').action(async (title: string) => {
-    await init();
-    const d = await createDraft({ title });
-    console.log(`Created draft [${d.id}] "${d.title}"`);
-    getClient().close();
-  });
+  cmd.command('create <title>')
+    .option('--skill <skill>', 'Skill name (must exist under research/skills/<skill>/)')
+    .option('--template <template>', 'Template name within the skill')
+    .action(async (title: string, opts: { skill?: string; template?: string }) => {
+      await init();
+      const d = await createDraft({
+        title,
+        skill: opts.skill,
+        template: opts.template,
+        projectDir: process.cwd(),
+      });
+      console.log(`Created draft [${d.id}] "${d.title}"${d.skill && d.template ? ` (${d.skill}/${d.template})` : ''}`);
+      getClient().close();
+    });
 
   cmd.command('edit <id>')
     .option('--body-file <path>', 'Read new body from a file')

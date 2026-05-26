@@ -2,6 +2,7 @@ import { getDb } from '../../db/connection';
 import { drafts, draftRevisions, draftEditProposals } from '../../db/schema';
 import { eq, desc, and } from 'drizzle-orm';
 import { Logger } from '../../core/logger';
+import { loadTemplate, templateDefaultResearchScope } from './templates';
 
 /**
  * Drafts store (Fase 4 #99).
@@ -35,15 +36,30 @@ export async function createDraft(input: {
   template?: string;
   bodyMd?: string;
   researchScope?: unknown;
+  projectDir?: string;
 }): Promise<DraftRow> {
   const db = getDb();
+
+  // #113: if a template is referenced and no explicit researchScope is set,
+  // try to derive one from the template's filter frontmatter.
+  let researchScope = input.researchScope;
+  if (researchScope == null && input.skill && input.template && input.projectDir) {
+    try {
+      const tpl = await loadTemplate(input.projectDir, input.skill, input.template);
+      const derived = templateDefaultResearchScope(tpl);
+      if (derived) researchScope = derived;
+    } catch (e) {
+      log.warn(`could not load template ${input.skill}/${input.template} for scope default: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
   const [row] = await db.insert(drafts).values({
     title: input.title,
     projectId: input.projectId ?? null,
     skill: input.skill ?? null,
     template: input.template ?? null,
     bodyMd: input.bodyMd ?? '',
-    researchScope: input.researchScope as object | undefined,
+    researchScope: researchScope as object | undefined,
   }).returning();
 
   // Initial snapshot if non-empty body

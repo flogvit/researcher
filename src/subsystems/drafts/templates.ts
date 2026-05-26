@@ -72,6 +72,25 @@ export async function loadTemplate(projectDir: string, skill: string, name: stri
   return parseTemplate(raw, skill, name);
 }
 
+/**
+ * Convert a template's `filter` frontmatter into a default research_scope
+ * for an anchored draft (#113). Used when a draft is created from a
+ * template and the caller hasn't supplied an explicit researchScope.
+ */
+export function templateDefaultResearchScope(template: DraftTemplate): Record<string, unknown> | null {
+  if (!template.filter) return null;
+  const scope: Record<string, unknown> = {};
+  const keywords = template.filter.keywords;
+  if (Array.isArray(keywords) && keywords.length > 0) {
+    scope.keywords = keywords;
+  }
+  for (const [k, v] of Object.entries(template.filter)) {
+    if (k === 'keywords') continue;
+    scope[k] = v;
+  }
+  return Object.keys(scope).length > 0 ? scope : null;
+}
+
 function parseTemplate(raw: string, skill: string, name: string): DraftTemplate {
   // Simple YAML-frontmatter parse: '---\n...keys...\n---\n<body>'
   const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
@@ -80,13 +99,18 @@ function parseTemplate(raw: string, skill: string, name: string): DraftTemplate 
   }
   const [, header, body] = match;
 
-  // Minimal YAML reader: top-level scalars + arrays of objects under
-  // 'parameters'. Anything fancier than that and users should run their
-  // template through a proper YAML preprocessor.
+  // Minimal YAML reader: top-level scalars, parameters (array of objects),
+  // and filter (nested object with scalar or array values). Anything fancier
+  // than that and users should run their template through a proper YAML
+  // preprocessor.
   const out: DraftTemplate = { skill, name, parameters: [], body };
   let currentKey: string | null = null;
   let currentArray: TemplateParameter[] | null = null;
   let currentItem: TemplateParameter | null = null;
+  let filterKey: string | null = null;
+  let filterArray: string[] | null = null;
+
+  const unquote = (s: string) => s.replace(/^['"]|['"]$/g, '');
 
   for (const line of header.split('\n')) {
     if (!line.trim()) continue;
@@ -94,30 +118,54 @@ function parseTemplate(raw: string, skill: string, name: string): DraftTemplate 
       const [k, ...rest] = line.split(':');
       const v = rest.join(':').trim();
       currentKey = k.trim();
+      filterKey = null;
+      filterArray = null;
       if (currentKey === 'parameters') {
         currentArray = out.parameters;
+        currentItem = null;
+      } else if (currentKey === 'filter') {
+        out.filter = {};
+        currentArray = null;
         currentItem = null;
       } else {
         currentArray = null;
         currentItem = null;
-        if (currentKey === 'name') out.name = v.replace(/^['"]|['"]$/g, '');
-        else if (currentKey === 'description') out.description = v.replace(/^['"]|['"]$/g, '');
+        if (currentKey === 'name') out.name = unquote(v);
+        else if (currentKey === 'description') out.description = unquote(v);
       }
     } else if (line.startsWith('  - ') && currentKey === 'parameters' && currentArray) {
       const rest = line.slice(4).trim();
       const colonIdx = rest.indexOf(':');
       currentItem = { name: '' };
       if (colonIdx > 0) {
-        currentItem[rest.slice(0, colonIdx).trim() as keyof TemplateParameter] = rest.slice(colonIdx + 1).trim().replace(/^['"]|['"]$/g, '') as never;
+        currentItem[rest.slice(0, colonIdx).trim() as keyof TemplateParameter] = unquote(rest.slice(colonIdx + 1).trim()) as never;
       }
       currentArray.push(currentItem);
+    } else if (line.startsWith('    - ') && currentKey === 'filter' && filterArray) {
+      filterArray.push(unquote(line.slice(6).trim()));
     } else if (line.startsWith('    ') && currentItem) {
       const [k, ...rest] = line.trim().split(':');
-      const v = rest.join(':').trim().replace(/^['"]|['"]$/g, '');
+      const v = unquote(rest.join(':').trim());
       if (k === 'required') currentItem.required = v === 'true';
       else if (k === 'name') currentItem.name = v;
       else if (k === 'label') currentItem.label = v;
       else if (k === 'default') currentItem.default = v;
+    } else if (line.startsWith('  ') && currentKey === 'filter' && out.filter) {
+      const trimmed = line.trim();
+      const colonIdx = trimmed.indexOf(':');
+      if (colonIdx < 0) continue;
+      filterKey = trimmed.slice(0, colonIdx).trim();
+      const v = trimmed.slice(colonIdx + 1).trim();
+      if (!v) {
+        filterArray = [];
+        out.filter[filterKey] = filterArray;
+      } else if (v.startsWith('[') && v.endsWith(']')) {
+        out.filter[filterKey] = v.slice(1, -1).split(',').map(s => unquote(s.trim())).filter(Boolean);
+        filterArray = null;
+      } else {
+        out.filter[filterKey] = unquote(v);
+        filterArray = null;
+      }
     }
   }
 
